@@ -15,7 +15,10 @@
     }
   },
   "devDependencies": {
+    "@angular-devkit/core": "~22.1.0",
+    "@nx/angular": "23.2.1",
     "nx": "23.2.1"
   },
-  "nx": {}
+  "nx": {},
+  "dependencies": {}
 }
