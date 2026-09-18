@@ -32,6 +32,7 @@
     "@playwright/test": "^1.37.0",
     "@schematics/angular": "~22.1.0",
     "@swc/helpers": "~0.5.18",
+    "@tauri-apps/cli": "^2.11.4",
     "@typescript-eslint/utils": "^8.58.0",
     "angular-eslint": "^22.1.0",
     "eslint": "^9.8.0",
