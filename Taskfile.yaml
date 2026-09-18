@@ -1,0 +1,37 @@
+version: "3"
+
+tasks:
+  install:
+    desc: "Install workspace dependencies"
+    cmds:
+      - pnpm install
+  web:dev:
+    desc: Start the Angular web application
+    cmds:
+      - pnpm exec nx serve tower-ui
+  web:build:
+    desc: Build the Angular web application
+    cmds:
+      - pnpm exec nx build tower-ui
+  web:test:
+    desc: Run Angular unit tests
+    cmds:
+      - pnpm exec nx test tower-ui
+  web:lint:
+    desc: Lint the Angular application
+    cmds:
+      - pnpm exec nx lint tower-ui
+  web:e2e:
+    desc: Run Angular end-to-end tests
+    cmds:
+      - pnpm exec nx e2e tower-ui-e2e
+  desktop:dev:
+    desc: Start the Tauri desktop application
+    dir: apps/desktop/tower-desktop
+    cmds:
+      - pnpm tauri dev
+  desktop:build:
+    desc: Build the Tauri desktop application
+    dir: apps/desktop/tower-desktop
+    cmds:
+      - pnpm tauri build
