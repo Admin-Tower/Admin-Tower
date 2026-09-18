@@ -1,9 +1,9 @@
 {
   "name": "tower-ui",
-  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
   "projectType": "application",
   "prefix": "tower",
-  "sourceRoot": "apps/tower-ui/src",
+  "sourceRoot": "apps/web/tower-ui/src",
   "tags": [],
   "targets": {
     "build": {
@@ -13,18 +13,18 @@
       ],
       "defaultConfiguration": "production",
       "options": {
-        "outputPath": "dist/apps/tower-ui",
-        "browser": "apps/tower-ui/src/main.ts",
-        "tsConfig": "apps/tower-ui/tsconfig.app.json",
+        "outputPath": "dist/apps/web/tower-ui",
+        "browser": "apps/web/tower-ui/src/main.ts",
+        "tsConfig": "apps/web/tower-ui/tsconfig.app.json",
         "inlineStyleLanguage": "scss",
         "assets": [
           {
             "glob": "**/*",
-            "input": "apps/tower-ui/public"
+            "input": "apps/web/tower-ui/public"
           }
         ],
         "styles": [
-          "apps/tower-ui/src/styles.scss"
+          "apps/web/tower-ui/src/styles.scss"
         ]
       },
       "configurations": {
@@ -78,7 +78,7 @@
       "options": {
         "buildTarget": "tower-ui:build",
         "port": 4200,
-        "staticFilePath": "dist/apps/tower-ui/browser",
+        "staticFilePath": "dist/apps/web/tower-ui/browser",
         "spa": true
       }
     }
