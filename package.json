@@ -1,0 +1,17 @@
+{
+  "name": "admin-tower",
+  "version": "0.0.0",
+  "description": "Control Tower for System Administration.",
+  "private": true,
+  "scripts": {},
+  "type": "module",
+  "packageManager": "pnpm@12.4.2",
+  "license": "ISC",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.4.2",
+      "onFail": "download"
+    }
+  }
+}
