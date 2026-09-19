@@ -1,0 +1,21 @@
+[mcp_servers.codegraph]
+args = ['serve', '--mcp']
+command = 'codegraph'
+
+[mcp_servers.engram]
+args = ['mcp']
+command = 'engram'
+
+[mcp_servers.firecrawl]
+args = ['-y', 'firecrawl-mcp']
+command = 'npx'
+
+[mcp_servers.firecrawl.env]
+FIRECRAWL_API_URL = 'http://127.0.0.1:3002'
+
+[mcp_servers.openai-developer-docs]
+url = 'https://developers.openai.com/mcp'
+
+[mcp_servers.semgrep]
+args = ['--from', 'semgrep==1.172.0', 'semgrep', 'mcp']
+command = 'uvx'
