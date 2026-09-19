@@ -1,21 +1,32 @@
 [mcp_servers.codegraph]
-args = ['serve', '--mcp']
-command = 'codegraph'
+args = [ "serve", "--mcp" ]
+command = "codegraph"
 
 [mcp_servers.engram]
-args = ['mcp']
-command = 'engram'
+args = [ "mcp" ]
+command = "engram"
 
 [mcp_servers.firecrawl]
-args = ['-y', 'firecrawl-mcp']
-command = 'npx'
+args = [ "-y", "firecrawl-mcp" ]
+command = "npx"
 
 [mcp_servers.firecrawl.env]
-FIRECRAWL_API_URL = 'http://127.0.0.1:3002'
+FIRECRAWL_API_URL = "http://127.0.0.1:3002"
 
 [mcp_servers.openai-developer-docs]
-url = 'https://developers.openai.com/mcp'
+url = "https://developers.openai.com/mcp"
 
 [mcp_servers.semgrep]
-args = ['--from', 'semgrep==1.172.0', 'semgrep', 'mcp']
-command = 'uvx'
+args = [ "--from", "semgrep==1.172.0", "semgrep", "mcp" ]
+command = "uvx"
+
+[mcp_servers.nx-mcp]
+command = "npx"
+args = [ "nx", "mcp" ]
+
+[features]
+multi_agent = true
+
+[agents.ci-monitor-subagent]
+description = "CI helper for /monitor-ci. Fetches CI status, retrieves fix details, or updates self-healing fixes. Executes one MCP tool call and returns the result."
+config_file = "agents/ci-monitor-subagent.toml"
