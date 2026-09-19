@@ -1,35 +1,16 @@
-@use '@angular/material' as mat;
-
-:host {
-  display: block;
-  height: 100dvh;
-}
-
-.sidenav-container {
-  height: 100%;
-}
-
-.sidenav {
-  width: 200px;
-}
-
-.sidenav .mat-toolbar {
-  background: inherit;
-}
-
-mat-sidenav-content > .mat-toolbar {
-  // Material 3 toolbars use neutral surfaces unless explicitly themed.
-  @include mat.toolbar-overrides((
-    container-background-color: var(--mat-sys-primary),
-    container-text-color: var(--mat-sys-on-primary),
-  ));
-  @include mat.icon-button-overrides((
-    icon-color: var(--mat-sys-on-primary),
-    state-layer-color: var(--mat-sys-on-primary),
-    ripple-color: color-mix(in srgb, var(--mat-sys-on-primary) 12%, transparent),
-  ));
-
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
+:host { display: block; height: 100dvh; }
+.sidenav-container { height: 100%; background: var(--tower-canvas); }
+.sidenav { width: 216px; border-radius: 0; background: #142238; color: #e5ecf5; }
+.sidenav .mat-toolbar { height: 64px; padding: 0 20px; background: transparent; color: #fff; font-size: 17px; gap: 10px; }
+.brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 7px; background: #3983fa; color: white; font-size: 12px; font-weight: 700; letter-spacing: .02em; }
+mat-nav-list { padding: 16px 12px; }
+mat-nav-list a { --mat-list-list-item-label-text-color: #c8d5e8; --mat-list-list-item-hover-label-text-color: #fff; --mat-list-list-item-focus-label-text-color: #fff; border-radius: 7px; }
+mat-nav-list a.active { background: #29405f; --mat-list-list-item-label-text-color: #fff; }
+.nav-footer { position: absolute; bottom: 24px; left: 20px; right: 16px; font-size: 11px; color: #acbdd4; display: grid; gap: 6px; }
+.nav-footer strong { font-size: 12px; color: #dce6f4; }
+mat-sidenav-content { background: var(--tower-canvas); }
+mat-sidenav-content > .mat-toolbar { position: sticky; top: 0; height: 52px; z-index: 20; background: #fff; color: #344762; border-bottom: 1px solid var(--tower-border); gap: 12px; }
+.workspace-label { font-size: 13px; font-weight: 600; }
+.workspace-hint { margin-left: auto; font-size: 12px; color: var(--tower-muted); }
+main { padding: 24px; }
+@media (max-width: 760px) { main { padding: 12px; } .workspace-hint { display: none; } }

@@ -17,7 +17,7 @@ describe('NavigationComponent', () => {
     TestBed.configureTestingModule({
       imports: [NavigationComponent],
       providers: [
-        provideRouter([]),
+        provideRouter([{ path: 'hosts', children: [] }]),
         { provide: BreakpointObserver, useValue: { observe: () => viewport } },
       ],
     });
@@ -50,7 +50,7 @@ describe('NavigationComponent', () => {
     expect(drawer.opened).toBe(true);
   });
 
-  it('toggles the side navigation and closes it after selection', async () => {
+  it('toggles the side navigation and keeps it open after desktop selection', async () => {
     const drawer = fixture.debugElement.query(By.directive(MatSidenav)).componentInstance as MatSidenav;
     expect(drawer.mode).toBe('side');
     expect(drawer.opened).toBe(true);
@@ -69,6 +69,6 @@ describe('NavigationComponent', () => {
     (fixture.nativeElement.querySelector('a') as HTMLAnchorElement).click();
     fixture.detectChanges();
     await fixture.whenStable();
-    expect(drawer.opened).toBe(false);
+    expect(drawer.opened).toBe(true);
   });
 });

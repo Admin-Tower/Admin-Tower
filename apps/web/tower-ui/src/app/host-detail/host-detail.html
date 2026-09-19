@@ -1,35 +1,44 @@
 <section [attr.aria-busy]="busy()">
-  <a routerLink="/hosts">← Hosts</a>
   @if (!service.desktop) { <h1>Host administration</h1><p>Open Admin-Tower for Linux to inspect and administer your hosts.</p> }
   @if (host(); as selected) {
-    <header><div><h1>{{ selected.settings.name }}</h1><p>{{ selected.settings.username }}&#64;{{ selected.settings.address }}:{{ selected.settings.port }}</p></div>
-      <div class="actions"><button matButton (click)="refresh()" [disabled]="locked()">Refresh</button>
-        <button matButton (click)="prepare({kind: 'inspect', elevated: false})" [disabled]="locked() || !terminal">Refresh in terminal</button>
-        <button matButton="tonal" (click)="prepare({kind: 'inspect', elevated: true})" [disabled]="locked() || !terminal">Inspect with sudo</button></div>
-    </header>
-    <label class="terminal">External terminal <select [(ngModel)]="terminal" [disabled]="locked()">@for (item of terminals(); track item.id) { <option [value]="item.id">{{ item.label }}</option> }</select></label>
-    @if (!terminals().length) { <p>Install GNOME Terminal, Konsole, or xterm for authentication and administration.</p> }
+    <div class="host-toolbar">
+      <div class="breadcrumb"><a routerLink="/hosts">Hosts</a><span aria-hidden="true">/</span><label class="host-switch"><span class="sr-only">Switch host</span><select [ngModel]="selected.id" (ngModelChange)="switchHost($event)" [disabled]="operation()?.state === 'running'">@for (item of hosts(); track item.id) { <option [value]="item.id">{{ item.settings.name }}</option> }</select></label></div>
+      <header><div><h1>{{ selected.settings.name }}</h1><p class="endpoint">{{ selected.settings.username }}&#64;{{ selected.settings.address }}:{{ selected.settings.port }}</p></div>
+        <div class="actions"><button matButton (click)="refresh()" [disabled]="locked() || refreshing()">{{ busy() || refreshing() ? 'Working…' : 'Refresh' }}</button>
+          <button matButton="tonal" (click)="prepare({kind: 'inspect', elevated: true})" [disabled]="locked() || !terminal">Inspect with sudo</button>
+          <button matButton="filled" (click)="connect()" [disabled]="locked() || !terminal">Open terminal</button></div>
+      </header>
+      <div class="context-bar">
+        @if (overview(); as snapshot) { <span class="snapshot" [title]="snapshot.elevated ? 'Privileged inspection requested; individual commands may still be denied.' : 'Journal, process owners and firewall data may be incomplete. Inspect with sudo for privileged visibility.'">{{ refreshing() ? 'Updating · ' : '' }}Snapshot {{ snapshot.collectedAt * 1000 | date:'medium' }} · {{ snapshot.elevated ? 'Privileged inspection · auto refresh paused' : 'SSH account permissions' }}</span> }
+        <label class="auto-refresh">Auto refresh <select [ngModel]="refreshInterval()" (ngModelChange)="setRefreshInterval($event)"><option [ngValue]="0">Off</option><option [ngValue]="15">15 sec</option><option [ngValue]="30">30 sec</option><option [ngValue]="60">60 sec</option></select></label>
+        <details class="connection-options"><summary>Connection options</summary><div class="connection-panel"><label class="terminal">External terminal <select [(ngModel)]="terminal" [disabled]="locked()">@for (item of terminals(); track item.id) { <option [value]="item.id">{{ item.label }}</option> }</select></label>
+          <button matButton (click)="prepare({kind: 'inspect', elevated: false})" [disabled]="locked() || !terminal">Refresh in terminal</button><p class="hint">Use terminal refresh when your key needs a passphrase. Credentials stay in the external terminal.</p>
+        </div></details>
+      </div>
+      <nav aria-label="Host information" class="tabs">@for (item of tabs; track item.id; let index = $index) { <button matButton [attr.aria-current]="tab() === item.id ? 'page' : null" [attr.aria-keyshortcuts]="'Alt+' + (index + 1)" [title]="item.label + ' · Alt+' + (index + 1)" (click)="selectTab(item.id)">{{ item.label }}</button> }</nav>
+    </div>
+    @if (!terminals().length) { <p class="notice">Install GNOME Terminal, Konsole, or xterm for authentication and administration.</p> }
   }
+  @if (connectionStatus()) { <p class="notice" role="status">{{ connectionStatus() }}</p> }
   @if (busy()) { <p role="status">Working… SSH inspection can take up to 90 seconds.</p> }
   @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
   @if (operation(); as job) { <p class="notice" role="status"><strong>{{ job.state }}</strong> · {{ job.message }}</p> }
   @if (review(); as pending) {
-    <aside class="review" aria-labelledby="review-heading">
+    <dialog id="action-review" class="review" aria-labelledby="review-heading" (cancel)="$event.preventDefault(); cancelReview()">
       <h2 id="review-heading" tabindex="-1">Review: {{ pending.summary }}</h2>
       <p><strong>{{ pending.host.settings.name }}</strong> · {{ pending.host.settings.username }}&#64;{{ pending.host.settings.address }}:{{ pending.host.settings.port }}</p>
       <pre>{{ pending.command }}</pre><p>{{ pending.warning }}</p><p>After a successful change, a fresh privileged snapshot is collected, including journal and firewall data.</p>
       <p>Enter your SSH key passphrase and sudo password only in the external terminal. This review expires at {{ pending.expiresAt * 1000 | date:'mediumTime' }}.</p>
       <button matButton="filled" (click)="execute()" [disabled]="locked() || !terminal">Confirm and open terminal</button>
-      <button matButton (click)="review.set(null)" [disabled]="locked()">Cancel</button>
-    </aside>
+      <button matButton (click)="cancelReview()" [disabled]="locked()">Cancel</button>
+    </dialog>
   }
+  @for (hostKey of [host()?.id]; track hostKey) {
   @if (overview(); as snapshot) {
-    <p class="snapshot">Snapshot {{ snapshot.collectedAt * 1000 | date:'medium' }} · {{ snapshot.elevated ? 'Privileged inspection requested' : 'SSH account permissions' }}. Refresh to see changes.</p>
-    @if (!snapshot.elevated) { <p class="hint">Journal, process owners and firewall data may be incomplete. Inspect with sudo for privileged visibility.</p> }
     @if (!snapshot.supported) { <p class="notice">Account and service changes require Ubuntu or Debian. Available inspection results are shown below.</p> }
-    <nav aria-label="Host information" class="tabs">@for (item of tabs; track item.id) { <button matButton [attr.aria-current]="tab() === item.id ? 'page' : null" (click)="tab.set(item.id)">{{ item.label }}</button> }</nav>
     @if (tab() === 'system') { <dl class="facts">@for (fact of facts(); track fact.label) { <div><dt>{{ fact.label }}</dt><dd>{{ fact.value }}</dd></div> }</dl> }
     @if (tab() === 'accounts') {
+      <div class="section-actions"><span>Accounts & access</span><button matButton="tonal" (click)="openAccount('username')" [disabled]="!canChange() || !terminal">New user</button><button matButton (click)="openAccount('group')" [disabled]="!canChange() || !terminal">New group</button></div>
       <details id="account-editor" class="action-editor" [open]="accountActions()" (toggle)="accountActions.set($any($event.target).open)"><summary>Account actions <span>Create users or groups</span></summary>
       <div class="forms">
         <form #newUserForm="ngForm" (ngSubmit)="newUserForm.valid && prepare({kind: 'createUser', username})"><h2>Create user</h2><label>New username <input name="username" [(ngModel)]="username" required pattern="[a-z_][a-z0-9_-]{0,31}" maxlength="32"></label><p>Home directory, private group, locked password.</p><button matButton="tonal" [disabled]="!canChange() || !newUserForm.valid || !terminal">Review user creation</button></form>
@@ -44,14 +53,17 @@
         <label>Action <select name="verb" [(ngModel)]="verb"><option value="start">Start</option><option value="stop">Stop</option><option value="restart">Restart</option><option value="reload">Reload</option><option value="enable">Enable at boot</option><option value="disable">Disable at boot</option></select></label>
         <button matButton="tonal" [disabled]="!canChange() || !unit || !terminal">Review service change</button></form></details>
     }
-    @if (tab() === 'accounts') { <tower-accounts [sections]="sections()" [canManage]="canChange() && !!terminal" (review)="prepare($event)" /> } @else if (tab() === 'firewall') { <tower-firewall [sections]="sections()" [busy]="locked()" [canInspect]="!!terminal" (inspect)="prepare({kind: 'inspect', elevated: true})" /> } @else {
-    <div class="sections">@for (item of sections(); track item.id) {
+    @if (tab() === 'processes' && host()) { <tower-live-htop [host]="host()!" [disabled]="locked()" /> <h2>Process snapshot</h2><p>The table below reflects the last host refresh.</p> }
+    @if (visited().has('accounts')) { <tower-accounts [hidden]="tab() !== 'accounts'" [sections]="accountSections()" [canManage]="canChange() && !!terminal" (review)="prepare($event)" /> } @if (visited().has('firewall')) { <tower-firewall [hidden]="tab() !== 'firewall'" [sections]="firewallSections()" [busy]="locked()" [canInspect]="!!terminal" (inspect)="prepare({kind: 'inspect', elevated: true})" /> }
+    <div class="sections">@for (item of tableSections(); track item.id) {
+      <div [hidden]="sectionTab(item.id) !== tab()">
       @if (item.id === 'system' || item.id === 'cpu') {
         <details class="section-details"><summary>{{ labels[item.id] }} details</summary><tower-inspection-table [section]="item" [title]="labels[item.id]" /></details>
       } @else {
-        <tower-inspection-table [section]="item" [title]="labels[item.id]" [actionLabel]="rowAction(item.id)" [actionsDisabled]="!canChange() || !terminal" (selected)="selectRow(item.id, $event)" />
+        <tower-inspection-table [section]="item" [title]="labels[item.id]" [quickServices]="sectionTab(item.id) === 'services'" (serviceAction)="prepare($event)" [actionLabel]="rowAction(item.id)" [actionsDisabled]="!canChange() || !terminal" (selected)="selectRow(item.id, $event)" />
       }
+      </div>
     }</div>
-    }
+  }
   }
 </section>

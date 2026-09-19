@@ -632,3 +632,89 @@ fn live_ssh_administration_snapshot_uses_hardened_transport() {
     write_private(&environment.home.join(".ssh/known_hosts"), b"");
     assert!(crate::admin::inspect(&store, &environment, &host.id).is_err());
 }
+
+#[test]
+#[ignore = "requires loopback sockets, Python Paramiko and local htop; run test-ssh"]
+fn live_ssh_htop_streams_real_viewer_resizes_and_stops() {
+    let (root, environment, store) = fixture();
+    assert!(Path::new("/usr/bin/htop").is_file());
+    let key = environment.home.join(".ssh/id_ed25519");
+    fs::remove_file(&key).unwrap();
+    generate_key(&key, "");
+    fs::copy(key.with_extension("pub"), root.path().join("client.pub")).unwrap();
+    fs::write(root.path().join("htop-mode"), b"").unwrap();
+    let mut server = ChildGuard(
+        Command::new("python3")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/ssh_server.py"))
+            .arg(root.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_for(&root.path().join("ready.json"), &mut server);
+    let ready: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join("ready.json")).unwrap()).unwrap();
+    write_private(
+        &environment.home.join(".ssh/known_hosts"),
+        ready["knownHost"].as_str().unwrap().as_bytes(),
+    );
+    let mut input = settings();
+    input.address = "127.0.0.1".into();
+    input.username = "fixture".into();
+    input.port = ready["port"].as_u64().unwrap() as u16;
+    let host = store.save(None, input).unwrap();
+    let sessions = crate::htop::Sessions::default();
+    let id = sessions
+        .start(&store, &environment, &host.id, 100, 30)
+        .unwrap();
+    assert!(sessions
+        .start(&store, &environment, &host.id, 100, 30)
+        .is_err());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut output = Vec::new();
+    loop {
+        let frame = sessions.poll(&id).unwrap();
+        output.extend(STANDARD.decode(frame.data).unwrap());
+        if String::from_utf8_lossy(&output).contains("Tasks:") {
+            break;
+        }
+        assert!(
+            !frame.ended,
+            "{}: {}",
+            frame.message,
+            String::from_utf8_lossy(&output)
+        );
+        assert!(
+            Instant::now() < deadline,
+            "No real htop output: {}",
+            String::from_utf8_lossy(&output)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let command = fs::read_to_string(root.path().join("last-command")).unwrap();
+    assert!(command.contains("--readonly"));
+    assert!(!command.contains("sudo"));
+    sessions.resize(&id, 120, 35).unwrap();
+    wait_for(&root.path().join("resize.json"), &mut server);
+    let resized: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join("resize.json")).unwrap()).unwrap();
+    assert_eq!(resized["cols"], 120);
+    assert_eq!(resized["rows"], 35);
+    sessions.input(&id, "q".into()).unwrap();
+    loop {
+        let frame = sessions.poll(&id).unwrap();
+        if frame.ended {
+            break;
+        }
+        assert!(Instant::now() < deadline, "htop did not exit after q");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    sessions.stop(&id).unwrap();
+    assert!(sessions.poll(&id).is_err());
+    let id = sessions
+        .start(&store, &environment, &host.id, 100, 30)
+        .unwrap();
+    sessions.stop(&id).unwrap();
+    assert!(sessions.poll(&id).is_err());
+}

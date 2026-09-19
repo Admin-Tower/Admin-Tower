@@ -1,5 +1,5 @@
 import { RouterLink } from '@angular/router';
-import { Component, computed, inject, OnInit, signal } from '@angular/core';
+import { afterNextRender, Component, ElementRef, Injector, computed, inject, OnInit, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatFormFieldModule } from '@angular/material/form-field';
@@ -14,6 +14,9 @@ import { Host, HostsService, IdentityOptions, Terminal } from './hosts.service';
   styleUrl: './hosts.scss'
 })
 export class Hosts implements OnInit {
+  private readonly element = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly injector = inject(Injector);
+  readonly sort = signal('name');
   readonly service = inject(HostsService);
   private readonly fb = inject(FormBuilder);
   readonly hosts = signal<Host[]>([]);
@@ -30,7 +33,10 @@ export class Hosts implements OnInit {
   readonly deleting = signal<Host | null>(null);
   readonly filtered = computed(() => {
     const search = this.search().trim().toLowerCase();
-    return this.hosts().filter(({ settings: h }) => `${h.name} ${h.address} ${h.username}`.toLowerCase().includes(search));
+    return this.hosts().filter(({ settings: h }) => `${h.name} ${h.address} ${h.username}`.toLowerCase().includes(search)).sort((a, b) => {
+      const key = this.sort() as 'name' | 'address' | 'username';
+      return a.settings[key].localeCompare(b.settings[key], undefined, { numeric: true, sensitivity: 'base' });
+    });
   });
   readonly form = this.fb.nonNullable.group({
     name: ['', [Validators.required, Validators.maxLength(120)]],
@@ -66,6 +72,10 @@ export class Hosts implements OnInit {
     });
     this.editing.set(true);
     this.deleting.set(null);
+    afterNextRender(() => {
+      const input = this.element.nativeElement.querySelector<HTMLInputElement>('input[formControlName="name"]');
+      input?.focus(); input?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    }, { injector: this.injector });
   }
 
   identityUnavailable(): boolean {

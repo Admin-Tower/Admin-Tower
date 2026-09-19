@@ -121,8 +121,7 @@ See the [nftables JSON schema](https://manpages.debian.org/bookworm/libnftables1
 for the read-only structured representation. The overview shows resource cards first, with
 additional system and CPU properties available as tables under expandable panels.
 
-These are snapshots,
-not live monitoring. Individual tools can report denied, unavailable, timeout,
+The tables show timestamped, automatically refreshed snapshots; live monitoring is available separately in Processes. Individual tools can report denied, unavailable, timeout,
 or error without hiding the remaining information.
 
 Use **Refresh in terminal** when an SSH key needs a passphrase. **Inspect with
@@ -175,6 +174,53 @@ typed actions, not an arbitrary shell command, and retains the local-main-window
 capability restriction. This boundary does not defend against a compromised
 local account or compromised remote host.
 
+### Workspace navigation and refresh
+
+The host toolbar keeps the target, section navigation and common actions together.
+Switch hosts directly from its selector, or open Services/Processes straight from
+an inventory row. Inventory search includes names, addresses and SSH users, with
+sorting by each field. New-user/new-group shortcuts focus the corresponding field.
+Service rows offer state-appropriate Start, Restart, Stop or boot-state actions;
+each opens the existing review in a keyboard-accessible dialog before execution.
+Escape cancels the review and restores focus to its originating control.
+
+Section links support browser Back/Forward and `?tab=services`-style deep links.
+Use Alt+1 through Alt+8 to switch sections, or `/` to focus the current section's
+search. These shortcuts do not intercept typing or the embedded terminal.
+Tables and account/firewall views load on first visit and retain filters, sorting
+and pagination while switching sections on the same host. Selecting another host
+resets that context. The sidebar stays open after desktop navigation.
+
+Noninteractive snapshots refresh automatically 15 seconds after the previous
+request completes; select 30 seconds, 60 seconds or Off in the toolbar. Existing
+data remains visible and usable during refresh, unchanged section objects are
+reused, and requests never overlap within a host view. Refresh pauses while the
+app is hidden, a review or operation is active, or a privileged snapshot is shown.
+Privileged snapshots require an explicit refresh to avoid silently replacing them
+with less complete unprivileged results. SSH latency and collection time determine
+actual snapshot freshness; only the separate htop view streams live process data.
+
+### Live htop
+
+Open **Processes → Start live htop** in the Linux desktop app for an embedded,
+interactive terminal running the host's actual `htop`, updated about once a
+second. Search, filter, sorting, tree view and keyboard navigation work inside
+this view. The sortable process snapshot remains below it.
+
+The remote host must have `/usr/bin/htop` with `--readonly` support. Admin-Tower
+always enables that mode: process changes are disabled, and there is no sudo,
+shell fallback or automatic installation. Authentication is noninteractive and
+uses the saved SSH identity and verified host trust. For an encrypted key, load
+it into your agent externally and select that **agent identity** in the host's
+settings. This view never prompts for credentials.
+
+Stop ends the session. Leaving the Processes tab, changing the host settings or
+closing the app also stops its local SSH client. Sessions expire after one hour,
+or after 20 seconds without UI polling. Output stays in memory and is not logged
+by the app; htop can display sensitive process arguments. Terminal clipboard
+writes are blocked. The embedded renderer is [xterm.js](https://xtermjs.org/);
+the process viewer is [htop](https://github.com/htop-dev/htop).
+
 ### Verification
 
 ```sh
@@ -190,12 +236,14 @@ pnpm nx build tower-desktop
 ```
 
 The SSH integration target requires Python 3 with `paramiko`, system `ssh`,
-`ssh-keygen`, `ssh-agent`, and `ssh-add`, and permission to open loopback/Unix
+`ssh-keygen`, `ssh-agent`, `ssh-add`, and `htop` with read-only support, and permission to open loopback/Unix
 sockets. It creates disposable keys, a loopback SSH server, and a separate agent;
 it never uses the user's SSH keys or trust file. It verifies exact identity
 selection, unknown/changed host rejection, hashed host entries, and disabled
 fallbacks. It also transports complete/malformed administration snapshots over
-real SSH without executing received commands on the fixture server. Native tests
+real SSH without executing received commands on the fixture server. A separate
+fixture starts a fixed local read-only htop and verifies streaming, resizing,
+keyboard input and session cleanup through SSH. Native tests
 cover review expiry/host binding, single use, locking, shell validation and a
 read-only local collector. Browser E2E tests mock native IPC; native tests separately exercise
 Tauri's origin/window permissions. Install the matching Playwright browsers with

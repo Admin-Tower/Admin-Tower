@@ -1,0 +1,11 @@
+<section aria-label="Live htop">
+  <header><div><h2>Live htop <span>Read-only</span></h2><p>Real htop running on {{ host().settings.address }} as {{ host().settings.username }}.</p></div>
+    <div class="actions"><button matButton="filled" (click)="start()" [disabled]="busy() || !!session() || disabled()">Start live htop</button><button matButton (click)="stop()" [disabled]="!busy() && !session()">Stop</button></div>
+  </header>
+  <details class="connection-help"><summary>Connection requirements</summary><p class="hint">Uses your selected SSH identity and verified host trust. For an encrypted key, load it into your agent externally and select that agent identity in the host settings. The remote host needs htop with read-only support; passwords and sudo are not requested here.</p></details>
+  <div class="session-status"><span role="status">{{ status() }}</span>@if (updated()) { <span>Last output {{ updated() | date:'mediumTime' }}</span> }</div>
+  @if (error()) { <p class="error" role="alert">{{ error() }}</p> }
+  @if (opened()) { <div class="shortcuts"><span>Click the terminal to use the keyboard.</span><button matButton [disabled]="!session()" (click)="key('h')">Help</button><button matButton [disabled]="!session()" (click)="key('/')">Search</button><button matButton [disabled]="!session()" (click)="key(filterKey)">Filter</button><button matButton [disabled]="!session()" (click)="key('t')">Tree / list</button><button matButton [disabled]="!session()" (click)="key('P')">Sort CPU</button><button matButton [disabled]="!session()" (click)="key('M')">Sort memory</button></div> }
+  <div #screen class="terminal" [hidden]="!opened()" role="group" aria-label="Remote htop terminal"></div>
+  <p class="hint">Refreshes about once per second. Leaving this tab stops the session. Process arguments may be visible in htop. Kill, renice and other system-changing features are disabled.</p>
+</section>

@@ -8,7 +8,7 @@ import { MatDividerModule } from '@angular/material/divider';
 import { BreakpointObserver } from '@angular/cdk/layout';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { map } from 'rxjs';
-import { RouterLink } from '@angular/router';
+import { RouterLink, RouterLinkActive } from '@angular/router';
 
 @Component({
   selector: 'tower-navigation',
@@ -21,7 +21,7 @@ import { RouterLink } from '@angular/router';
     MatListModule,
     MatIconModule,
     MatDividerModule,
-    RouterLink,
+    RouterLink, RouterLinkActive,
   ]
 })
 export class NavigationComponent {

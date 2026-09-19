@@ -3,6 +3,8 @@ mod admin;
 #[cfg(target_os = "linux")]
 mod commands;
 #[cfg(target_os = "linux")]
+mod htop;
+#[cfg(target_os = "linux")]
 mod inventory;
 #[cfg(target_os = "linux")]
 mod ssh;
@@ -30,6 +32,11 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "linux")]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::start_htop,
+        commands::poll_htop,
+        commands::input_htop,
+        commands::resize_htop,
+        commands::stop_htop,
         commands::list_hosts,
         commands::save_host,
         commands::delete_host,
@@ -52,6 +59,7 @@ pub fn run() {
                     },
                     environment: ssh::Environment::current().map_err(std::io::Error::other)?,
                     operations: std::sync::Mutex::new(()),
+                    htop: Default::default(),
                 }));
             }
             if cfg!(debug_assertions) {
@@ -63,6 +71,15 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "linux")]
+            if matches!(event, tauri::RunEvent::Exit) {
+                use tauri::Manager;
+                app.state::<std::sync::Arc<commands::Backend>>()
+                    .htop
+                    .stop_all();
+            }
+        });
 }

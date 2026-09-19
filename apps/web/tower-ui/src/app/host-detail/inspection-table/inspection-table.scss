@@ -31,3 +31,14 @@ summary { cursor: pointer; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; margin-top: 12px; }
 .long-value div { margin-top: 10px; }
 @media (max-width: 600px) { header, .toolbar, footer { padding-left: 12px; padding-right: 12px; } td, th button { padding: 10px; } }
+
+article { border-radius: 8px; }
+header { padding: 14px 16px 4px; }
+h2 { font-size: 14px; }
+.toolbar { padding: 10px 16px 12px; }
+th { background: #f1f4f8; color: #43556c; font-size: 12px; }
+td { padding: 8px 12px; vertical-align: middle; }
+th button { padding: 10px 12px; }
+.row-actions { min-width: 220px; white-space: nowrap; }
+.row-actions button { padding: 0 9px; }
+footer { padding: 10px 16px; }

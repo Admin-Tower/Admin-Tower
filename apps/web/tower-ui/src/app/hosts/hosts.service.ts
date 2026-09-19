@@ -19,6 +19,7 @@ export interface IdentityOptions {
   agentError: string | null;
   keyError: string | null;
 }
+export interface HtopFrame { data: string; ended: boolean; message: string }
 export interface Terminal { id: string; label: string }
 
 export type HostAction =
@@ -41,6 +42,11 @@ export class HostsService {
     return invoke<T>(command, args);
   }
 
+  startHtop(id: string, cols: number, rows: number) { return this.call<string>('start_htop', { id, cols, rows }); }
+  pollHtop(sessionId: string) { return this.call<HtopFrame>('poll_htop', { sessionId }); }
+  inputHtop(sessionId: string, data: string) { return this.call<void>('input_htop', { sessionId, data }); }
+  resizeHtop(sessionId: string, cols: number, rows: number) { return this.call<void>('resize_htop', { sessionId, cols, rows }); }
+  stopHtop(sessionId: string) { return this.call<void>('stop_htop', { sessionId }); }
   inspect(id: string) { return this.call<HostOverview>('inspect_host', { id }); }
   review(id: string, action: HostAction) { return this.call<ActionReview>('review_host_action', { id, action }); }
   start(reviewId: string, terminal: string) { return this.call<HostOperation>('start_host_action', { reviewId, terminal }); }

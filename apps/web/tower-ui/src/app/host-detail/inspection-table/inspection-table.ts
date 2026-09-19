@@ -1,7 +1,7 @@
 import { Component, computed, input, output, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
-import { HostSection } from '../../hosts/hosts.service';
+import { HostAction, HostSection } from '../../hosts/hosts.service';
 import { compareCells, inspectionData } from '../inspection-data';
 
 @Component({
@@ -14,6 +14,12 @@ export class InspectionTable {
   readonly title = input.required<string>();
   readonly actionLabel = input('');
   readonly actionsDisabled = input(false);
+  readonly serviceAction = output<Extract<HostAction, { kind: 'service' }>>();
+  readonly quickServices = input(false);
+  serviceActions(row: string[]): { label: string; verb: Extract<HostAction, { kind: 'service' }>['verb'] }[] {
+    if (this.section().id === 'serviceFiles') return row[1] === 'enabled' ? [{ label: 'Disable at boot', verb: 'disable' }] : row[1] === 'disabled' ? [{ label: 'Enable at boot', verb: 'enable' }] : [];
+    return row[2] === 'active' ? [{ label: 'Restart', verb: 'restart' }, { label: 'Stop', verb: 'stop' }] : ['inactive', 'failed'].includes(row[2]) ? [{ label: 'Start', verb: 'start' }] : [];
+  }
   readonly selected = output<string[]>();
   readonly query = signal('');
   readonly stateFilter = signal('');

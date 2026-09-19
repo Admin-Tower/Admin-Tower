@@ -1,6 +1,6 @@
 <section aria-labelledby="hosts-heading" [attr.aria-busy]="busy()">
   <header class="page-header">
-    <div><h1 id="hosts-heading">Hosts</h1><p>Your SSH connections, kept on this device.</p></div>
+    <div><h1 id="hosts-heading">Hosts</h1><p>Manage your infrastructure from one workspace.</p></div>
     @if (service.desktop) {
       <div class="actions">
         <button matButton (click)="refresh()" [disabled]="busy()">Refresh</button>
@@ -19,20 +19,20 @@
         <h2 id="editor-heading">{{ editId() ? 'Edit host' : 'Add host' }}</h2>
         <fieldset [disabled]="busy()">
           <div class="form-grid">
-            <mat-form-field><mat-label>Name</mat-label><input matInput formControlName="name" maxlength="120" autocomplete="off"><mat-error>Enter a name.</mat-error></mat-form-field>
-            <mat-form-field><mat-label>Hostname or IP address</mat-label><input matInput formControlName="address" placeholder="server.example.com" autocomplete="off"><mat-error>Enter a hostname or IP address.</mat-error></mat-form-field>
-            <mat-form-field><mat-label>SSH username</mat-label><input matInput formControlName="username" autocomplete="off"><mat-error>Enter a valid SSH username.</mat-error></mat-form-field>
-            <mat-form-field><mat-label>Port</mat-label><input matInput type="number" min="1" max="65535" formControlName="port"><mat-error>Use a whole number from 1 to 65535.</mat-error></mat-form-field>
-            <mat-form-field>
+            <mat-form-field appearance="outline" floatLabel="always" subscriptSizing="dynamic"><mat-label>Name</mat-label><input matInput aria-label="Name" formControlName="name" maxlength="120" autocomplete="off"><mat-error>Enter a name.</mat-error></mat-form-field>
+            <mat-form-field appearance="outline" floatLabel="always" subscriptSizing="dynamic"><mat-label>Hostname or IP address</mat-label><input matInput formControlName="address" placeholder="server.example.com" autocomplete="off"><mat-error>Enter a hostname or IP address.</mat-error></mat-form-field>
+            <mat-form-field appearance="outline" floatLabel="always" subscriptSizing="dynamic"><mat-label>SSH username</mat-label><input matInput formControlName="username" autocomplete="off"><mat-error>Enter a valid SSH username.</mat-error></mat-form-field>
+            <mat-form-field appearance="outline" floatLabel="always" subscriptSizing="dynamic"><mat-label>Port</mat-label><input matInput type="number" min="1" max="65535" formControlName="port"><mat-error>Use a whole number from 1 to 65535.</mat-error></mat-form-field>
+            <mat-form-field appearance="outline" floatLabel="always" subscriptSizing="dynamic">
               <mat-label>Authentication</mat-label>
               <mat-select formControlName="kind" (selectionChange)="form.controls.identity.setValue('')">
                 <mat-option value="agent">SSH agent identity</mat-option>
                 <mat-option value="keyFile">Key file in ~/.ssh</mat-option>
               </mat-select>
             </mat-form-field>
-            <mat-form-field>
+            <mat-form-field appearance="outline" floatLabel="always" subscriptSizing="dynamic">
               <mat-label>{{ form.controls.kind.value === 'agent' ? 'Agent identity' : 'Key file' }}</mat-label>
-              <mat-select formControlName="identity">
+              <mat-select formControlName="identity" [aria-label]="form.controls.kind.value === 'agent' ? 'Agent identity' : 'Key file'">
                 @if (identityUnavailable()) { <mat-option [value]="form.controls.identity.value">{{ form.controls.identity.value }} (unavailable)</mat-option> }
                 @if (form.controls.kind.value === 'agent') {
                   @for (identity of identities().agentIdentities; track identity.fingerprint) {
@@ -61,14 +61,15 @@
     }
     @if (loaded()) {
       <div class="filters">
-        <mat-form-field><mat-label>Search hosts</mat-label><input matInput [value]="search()" (input)="search.set($any($event.target).value)"></mat-form-field>
-        <mat-form-field><mat-label>Terminal</mat-label><mat-select [value]="terminal()" (selectionChange)="terminal.set($event.value)" [disabled]="busy()">
+        <mat-form-field appearance="outline" floatLabel="always" subscriptSizing="dynamic"><mat-label>Search hosts</mat-label><input matInput type="search" placeholder="Name, address or SSH user" [value]="search()" (input)="search.set($any($event.target).value)"></mat-form-field>
+        <mat-form-field appearance="outline" floatLabel="always" subscriptSizing="dynamic"><mat-label>Terminal</mat-label><mat-select [value]="terminal()" (selectionChange)="terminal.set($event.value)" [disabled]="busy()">
           @for (item of terminals(); track item.id) { <mat-option [value]="item.id">{{ item.label }}</mat-option> }
         </mat-select></mat-form-field>
       </div>
+      <div class="inventory-summary"><span>{{ filtered().length }} of {{ hosts().length }} hosts</span><label>Sort by <select [value]="sort()" (change)="sort.set($any($event.target).value)"><option value="name">Name</option><option value="address">Address</option><option value="username">SSH user</option></select></label>@if (search()) { <button matButton (click)="search.set('')">Clear search</button> }</div>
       @if (!terminals().length) { <p class="hint">Install GNOME Terminal, Konsole, or xterm to open SSH connections.</p> }
       @if (!hosts().length) { <div class="notice"><h2>No hosts yet</h2><p>Add a host and choose its SSH identity to get started.</p></div> }
-      @else if (!filtered().length) { <p>No hosts match your search.</p> }
+      @else if (!filtered().length) { <div class="notice"><h2>No matching hosts</h2><p>Try a different name, address or SSH user.</p><button matButton (click)="search.set('')">Show all hosts</button></div> }
       <ul class="host-list" aria-label="Saved hosts">
         @for (host of filtered(); track host.id) {
           <li>
@@ -76,6 +77,8 @@
               <p class="identity">{{ host.settings.authentication.kind === 'agent' ? 'Agent · ' + $any(host.settings.authentication).fingerprint : 'Key · ~/.ssh/' + $any(host.settings.authentication).filename }}</p>
             </div>
             <div class="actions">
+              <a matButton [routerLink]="['/hosts', host.id]" [queryParams]="{tab: 'services'}" [attr.aria-label]="'Services for ' + host.settings.name">Services</a>
+              <a matButton [routerLink]="['/hosts', host.id]" [queryParams]="{tab: 'processes'}" [attr.aria-label]="'Processes for ' + host.settings.name">Processes</a>
               <button matButton="tonal" (click)="connect(host)" [disabled]="busy() || !terminal()" [attr.aria-label]="'Open terminal for ' + host.settings.name">Open terminal</button>
               <button matButton (click)="edit(host)" [disabled]="busy()" [attr.aria-label]="'Edit ' + host.settings.name">Edit</button>
               <button matButton (click)="deleting.set(host)" [disabled]="busy()" [attr.aria-label]="'Delete ' + host.settings.name">Delete</button>

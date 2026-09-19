@@ -1,4 +1,5 @@
 @use '@angular/material' as mat;
+@import '@xterm/xterm/css/xterm.css';
 
 html {
   @include mat.theme((
@@ -6,8 +7,8 @@ html {
       primary: mat.$azure-palette,
       tertiary: mat.$blue-palette,
     ),
-    typography: Arial,
-    density: 0,
+    typography: (plain-family: '"Inter", "Segoe UI", system-ui, sans-serif', brand-family: '"Inter", "Segoe UI", system-ui, sans-serif'),
+    density: -2,
   ));
 
   color-scheme: light;
@@ -20,4 +21,26 @@ body {
   background-color: var(--mat-sys-surface);
   color: var(--mat-sys-on-surface);
   font: var(--mat-sys-body-medium);
+}
+
+:root {
+  --tower-border: #dce2ea;
+  --tower-muted: #536379;
+  --tower-canvas: #f3f5f9;
+  --mat-sys-surface: #fff;
+  --mat-sys-background: #f3f5f9;
+  --mat-sys-on-surface: #1b2b40;
+  --mat-sys-on-surface-variant: #536379;
+  --mat-sys-outline-variant: #dce2ea;
+}
+[hidden] { display: none !important; }
+*, *::before, *::after { box-sizing: border-box; }
+a { color: var(--mat-sys-primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, input, select, summary, a { -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid var(--mat-sys-primary); outline-offset: 3px; }
+button:disabled { cursor: not-allowed; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

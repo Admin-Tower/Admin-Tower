@@ -52,9 +52,9 @@ test.describe('inventory with mocked native IPC', () => {
     await expect(page.getByRole('status')).toHaveText('Host saved.');
     await page.reload();
     await expect(page.getByRole('heading', { name: 'Production', exact: true })).toBeVisible();
-    await page.getByRole('textbox', { name: 'Search hosts' }).fill('missing');
-    await expect(page.getByText('No hosts match your search.')).toBeVisible();
-    await page.getByRole('textbox', { name: 'Search hosts' }).fill('');
+    await page.getByRole('searchbox', { name: 'Search hosts' }).fill('missing');
+    await expect(page.getByRole('heading', { name: 'No matching hosts' })).toBeVisible();
+    await page.getByRole('searchbox', { name: 'Search hosts' }).fill('');
     await page.getByRole('button', { name: 'Edit Production', exact: true }).click();
     await page.getByRole('spinbutton', { name: 'Port' }).fill('2222');
     await page.getByRole('button', { name: 'Save host', exact: true }).click();

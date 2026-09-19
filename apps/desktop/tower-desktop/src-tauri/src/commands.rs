@@ -9,6 +9,7 @@ pub struct Backend {
     pub store: Store,
     pub environment: Environment,
     pub operations: Mutex<()>,
+    pub htop: crate::htop::Sessions,
 }
 
 async fn blocking<T: Send + 'static>(
@@ -96,8 +97,9 @@ mod tests {
                     agent_socket: None,
                 },
                 operations: Mutex::new(()),
+                htop: Default::default(),
             }))
-            .invoke_handler(tauri::generate_handler![list_hosts])
+            .invoke_handler(tauri::generate_handler![list_hosts, stop_htop])
             .build(tauri::generate_context!())
             .unwrap();
         let main = WebviewWindowBuilder::new(&app, "main", Default::default())
@@ -106,12 +108,12 @@ mod tests {
         let other = WebviewWindowBuilder::new(&app, "other", Default::default())
             .build()
             .unwrap();
-        let request = |url: &str| InvokeRequest {
-            cmd: "list_hosts".into(),
+        let request = |url: &str, cmd: &str| InvokeRequest {
+            cmd: cmd.into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
             url: url.parse().unwrap(),
-            body: tauri::ipc::InvokeBody::default(),
+            body: tauri::ipc::InvokeBody::Json(serde_json::json!({ "sessionId": "missing" })),
             headers: Default::default(),
             invoke_key: INVOKE_KEY.into(),
         };
@@ -120,9 +122,11 @@ mod tests {
         } else {
             "tauri://localhost"
         };
-        assert!(get_ipc_response(&main, request(local)).is_ok());
-        assert!(get_ipc_response(&other, request(local)).is_err());
-        assert!(get_ipc_response(&main, request("https://untrusted.example")).is_err());
+        for cmd in ["list_hosts", "stop_htop"] {
+            assert!(get_ipc_response(&main, request(local, cmd)).is_ok());
+            assert!(get_ipc_response(&other, request(local, cmd)).is_err());
+            assert!(get_ipc_response(&main, request("https://untrusted.example", cmd)).is_err());
+        }
     }
 }
 
@@ -170,4 +174,38 @@ pub async fn get_host_operation(
         crate::admin::status(&b.store, &id, &operation_id)
     })
     .await
+}
+
+#[tauri::command]
+pub async fn start_htop(
+    state: State<'_, Arc<Backend>>,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<String> {
+    blocking(state.inner().clone(), move |b| {
+        b.htop.start(&b.store, &b.environment, &id, cols, rows)
+    })
+    .await
+}
+#[tauri::command]
+pub fn poll_htop(state: State<'_, Arc<Backend>>, session_id: String) -> Result<crate::htop::Frame> {
+    state.htop.poll(&session_id)
+}
+#[tauri::command]
+pub fn input_htop(state: State<'_, Arc<Backend>>, session_id: String, data: String) -> Result<()> {
+    state.htop.input(&session_id, data)
+}
+#[tauri::command]
+pub fn resize_htop(
+    state: State<'_, Arc<Backend>>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<()> {
+    state.htop.resize(&session_id, cols, rows)
+}
+#[tauri::command]
+pub fn stop_htop(state: State<'_, Arc<Backend>>, session_id: String) -> Result<()> {
+    state.htop.stop(&session_id)
 }

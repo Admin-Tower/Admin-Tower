@@ -29,7 +29,7 @@
                 @else { {{ cell || '—' }} }
               </td>
             }
-            @if (actionLabel()) { <td><button matButton [disabled]="actionsDisabled()" (click)="selected.emit(row)" [attr.aria-label]="actionLabel() + ' ' + row[0]">{{ actionLabel() }}</button></td> }
+            @if (actionLabel()) { <td class="row-actions">@if (quickServices()) { @for (action of serviceActions(row); track action.verb) { <button matButton [disabled]="actionsDisabled()" (click)="serviceAction.emit({kind: 'service', unit: row[0], verb: action.verb})" [attr.aria-label]="action.label + ' ' + row[0]">{{ action.label }}</button> } }<button matButton [disabled]="actionsDisabled()" (click)="selected.emit(row)" [attr.aria-label]="actionLabel() + ' ' + row[0]">{{ actionLabel() }}</button></td> }
           </tr> }
         </tbody></table>
         @if (!filtered().length) { <p class="empty">No records match your filters.</p> }

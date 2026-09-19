@@ -77,4 +77,50 @@ describe('HostDetail', () => {
     const fixture = TestBed.createComponent(HostDetail); await fixture.whenStable();
     expect(service.list).not.toHaveBeenCalled();
   });
+  it('refreshes in the background without overlap and retains unchanged section references', async () => {
+    const fixture = TestBed.createComponent(HostDetail); await fixture.whenStable();
+    const component = fixture.componentInstance;
+    component.setRefreshInterval(0);
+    const previous = component.overview()!.sections[0];
+    let finish!: (value: HostOverview) => void;
+    service.inspect.mockImplementationOnce(() => new Promise<HostOverview>(resolve => { finish = resolve; }));
+    const pending = component.refresh();
+    await component.refresh();
+    expect(service.inspect).toHaveBeenCalledTimes(2);
+    expect(component.refreshing()).toBe(true);
+    expect(component.locked()).toBe(false);
+    expect(component.overview()!.sections[0]).toBe(previous);
+    finish({ ...overview, sections: overview.sections.map(section => ({ ...section })) });
+    await pending;
+    expect(component.overview()!.sections[0]).toBe(previous);
+    expect(component.refreshing()).toBe(false);
+  });
+  it('pauses automatic inspection while hidden or showing a privileged snapshot', async () => {
+    const fixture = TestBed.createComponent(HostDetail); await fixture.whenStable();
+    const component = fixture.componentInstance; component.setRefreshInterval(0);
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    component.setRefreshInterval(15);
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(service.inspect).toHaveBeenCalledTimes(1);
+    visibility.mockReturnValue('visible');
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(service.inspect).toHaveBeenCalledTimes(2);
+    component.overview.set({ ...overview, elevated: true });
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(service.inspect).toHaveBeenCalledTimes(2);
+    component.setRefreshInterval(0); visibility.mockRestore();
+  });
+  it('discards background inspection results that arrive after an action review', async () => {
+    const fixture = TestBed.createComponent(HostDetail); await fixture.whenStable();
+    const component = fixture.componentInstance; component.setRefreshInterval(0);
+    let finish!: (value: HostOverview) => void;
+    service.inspect.mockImplementationOnce(() => new Promise<HostOverview>(resolve => { finish = resolve; }));
+    const pending = component.refresh();
+    await component.prepare({ kind: 'createUser', username: 'alice' });
+    finish({ ...overview, collectedAt: 999 }); await pending;
+    expect(component.overview()?.collectedAt).toBe(123);
+    expect(component.review()?.id).toBe('review');
+  });
+
 });

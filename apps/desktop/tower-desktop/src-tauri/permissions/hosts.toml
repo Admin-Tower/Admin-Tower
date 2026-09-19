@@ -1,4 +1,4 @@
 [[permission]]
 identifier = "manage-hosts"
 description = "Manage local host metadata and launch validated SSH connections."
-commands.allow = ["list_hosts", "save_host", "delete_host", "list_identities", "list_terminals", "connect_host", "inspect_host", "review_host_action", "start_host_action", "get_host_operation"]
+commands.allow = ["start_htop", "poll_htop", "input_htop", "resize_htop", "stop_htop", "list_hosts", "save_host", "delete_host", "list_identities", "list_terminals", "connect_host", "inspect_host", "review_host_action", "start_host_action", "get_host_operation"]
