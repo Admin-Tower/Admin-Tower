@@ -1,0 +1,31 @@
+<mat-sidenav-container class="sidenav-container">
+    <mat-sidenav #drawer class="sidenav" fixedInViewport aria-label="Main navigation"
+                 [attr.role]="'navigation'"
+                 [mode]="'side'"
+                 [opened]=true>
+        <mat-toolbar>Admin Tower</mat-toolbar>
+        <mat-divider></mat-divider>
+        <mat-nav-list aria-label="Main navigation">
+            <a mat-list-item routerLink="/" (click)="drawer.close()">Home</a>
+        </mat-nav-list>
+    </mat-sidenav>
+    <mat-sidenav-content>
+        <mat-toolbar>
+            <button
+                    type="button"
+                    aria-label="Toggle sidenav"
+                    [attr.aria-expanded]="drawer.opened"
+                    matIconButton
+                    (click)="drawer.toggle()">
+                <mat-icon>
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path fill="currentColor" d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/>
+                    </svg>
+                </mat-icon>
+            </button>
+        </mat-toolbar>
+        <main class="p-4">
+            <ng-content></ng-content>
+        </main>
+    </mat-sidenav-content>
+</mat-sidenav-container>
