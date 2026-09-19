@@ -4,6 +4,7 @@ import { MatButtonModule } from '@angular/material/button';
 import { MatSidenavModule } from '@angular/material/sidenav';
 import { MatListModule } from '@angular/material/list';
 import { MatIconModule } from '@angular/material/icon';
+import { MatDividerModule } from '@angular/material/divider';
 import { RouterLink } from '@angular/router';
 
 @Component({
@@ -16,6 +17,7 @@ import { RouterLink } from '@angular/router';
     MatSidenavModule,
     MatListModule,
     MatIconModule,
+    MatDividerModule,
     RouterLink,
   ]
 })
