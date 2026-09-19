@@ -24,6 +24,7 @@
           }
         ],
         "styles": [
+          "apps/web/tower-ui/src/tailwind.css",
           "apps/web/tower-ui/src/styles.scss"
         ]
       },
