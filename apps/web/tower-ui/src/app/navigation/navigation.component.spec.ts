@@ -1,24 +1,24 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { BreakpointObserver } from '@angular/cdk/layout';
 import { MatSidenav } from '@angular/material/sidenav';
-import { By } from '@angular/platform-browser';
+import { BreakpointObserver } from '@angular/cdk/layout';
 import { BehaviorSubject } from 'rxjs';
+import { By } from '@angular/platform-browser';
 
 import { NavigationComponent } from './navigation.component';
 
 describe('NavigationComponent', () => {
   let component: NavigationComponent;
+  let viewport: BehaviorSubject<{ matches: boolean }>;
   let fixture: ComponentFixture<NavigationComponent>;
-  let handset: BehaviorSubject<{ matches: boolean }>;
 
   beforeEach(() => {
-    handset = new BehaviorSubject<{ matches: boolean }>({ matches: false });
+    viewport = new BehaviorSubject<{ matches: boolean }>({ matches: false });
     TestBed.configureTestingModule({
       imports: [NavigationComponent],
       providers: [
         provideRouter([]),
-        { provide: BreakpointObserver, useValue: { observe: () => handset } },
+        { provide: BreakpointObserver, useValue: { observe: () => viewport } },
       ],
     });
     fixture = TestBed.createComponent(NavigationComponent);
@@ -34,19 +34,32 @@ describe('NavigationComponent', () => {
     const drawer = fixture.debugElement.query(By.directive(MatSidenav)).componentInstance as MatSidenav;
     expect(drawer.mode).toBe('side');
     expect(drawer.opened).toBe(true);
-    expect(fixture.nativeElement.querySelector('button')).toBeNull();
+    expect(fixture.nativeElement.querySelector('button')?.getAttribute('aria-expanded')).toBe('true');
+    expect(fixture.nativeElement.querySelector('a[href="/hosts"]')?.textContent).toContain('Hosts');
   });
 
-  it('toggles the overlay navigation on handsets and closes it after selection', async () => {
-    handset.next({ matches: true });
-    fixture.detectChanges();
+  it('switches to a closed overlay on narrow screens', async () => {
+    viewport.next({ matches: true });
     await fixture.whenStable();
-
     const drawer = fixture.debugElement.query(By.directive(MatSidenav)).componentInstance as MatSidenav;
     expect(drawer.mode).toBe('over');
     expect(drawer.opened).toBe(false);
+    viewport.next({ matches: false });
+    await fixture.whenStable();
+    expect(drawer.mode).toBe('side');
+    expect(drawer.opened).toBe(true);
+  });
+
+  it('toggles the side navigation and closes it after selection', async () => {
+    const drawer = fixture.debugElement.query(By.directive(MatSidenav)).componentInstance as MatSidenav;
+    expect(drawer.mode).toBe('side');
+    expect(drawer.opened).toBe(true);
 
     const toggle = fixture.nativeElement.querySelector('button') as HTMLButtonElement;
+    toggle.click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(drawer.opened).toBe(false);
     toggle.click();
     fixture.detectChanges();
     await fixture.whenStable();

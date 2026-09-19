@@ -1,0 +1,35 @@
+:host { display: block; }
+section { max-width: 1440px; margin: auto; padding: 24px; }
+header, .actions, .tabs { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+header { justify-content: space-between; }
+h1 { margin: 12px 0 8px; font-size: 1.8rem; font-weight: 600; }
+h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 12px; }
+p { margin: 8px 0; }
+.terminal { max-width: 320px; }
+label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+input, select { color: inherit; background: var(--mat-sys-surface-container, #f4f4f4); border: 1px solid var(--mat-sys-outline, #777); border-radius: 6px; padding: 10px; font: inherit; max-width: 100%; }
+.review, article, form { border: 1px solid var(--mat-sys-outline-variant, #ccc); border-radius: 12px; padding: 16px; min-width: 0; }
+.review { border: 2px solid var(--mat-sys-primary, #365dab); margin: 20px 0; }
+.tabs { border-bottom: 1px solid var(--mat-sys-outline-variant, #ccc); padding-bottom: 12px; margin: 20px 0; }
+.tabs [aria-current] { background: var(--mat-sys-secondary-container, #dae3f5); }
+.forms { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.service-form { max-width: 600px; margin-bottom: 20px; }
+.sections { display: grid; gap: 16px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 560px; font-size: .85rem; line-height: 1.5; }
+.badge { font-size: .75rem; font-weight: normal; margin-left: 8px; }
+.error, .problem { color: var(--mat-sys-error, #ba1a1a); }
+.notice { padding: 12px; background: var(--mat-sys-surface-container, #f1f1f1); border-radius: 6px; }
+.hint, .snapshot { font-size: .9rem; }
+@media (max-width: 600px) { section { padding: 16px; } }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.facts div { border-radius: 10px; background: var(--mat-sys-surface-container, #efeff4); padding: 16px; }
+dt { font-size: .8rem; margin-bottom: 8px; }
+dd { font-size: 1.05rem; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+
+.action-editor, .section-details { border: 1px solid var(--mat-sys-outline-variant, #ccc); border-radius: 10px; margin-bottom: 16px; }
+.action-editor > summary, .section-details > summary { padding: 16px 20px; cursor: pointer; font-weight: 600; }
+summary span { font-weight: normal; font-size: .85rem; margin-left: 12px; color: var(--mat-sys-on-surface-variant, #555); }
+.action-editor .forms, .action-editor .service-form { margin: 0 16px 16px; }
+.section-details { overflow: hidden; margin-bottom: 0; }
+@media (max-width: 600px) { summary span { display: block; margin: 6px 0 0; } }

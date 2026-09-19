@@ -1,0 +1,47 @@
+<article [attr.aria-label]="title()">
+  <header><h2>{{ title() }}</h2><span class="status" [class.negative]="section().status !== 'ok'">{{ section().status === 'ok' ? data().rows.length + ' records' : section().status }}</span></header>
+  @if (section().truncated) { <p class="notice">Partial results: output was truncated at 128 KiB. Search and sorting apply to the collected records only.</p> }
+  @if (section().status !== 'ok') { <p class="failure">{{ failure() }}</p> }
+  @else {
+    @if (data().note) { <p class="note">{{ data().note }}</p> }
+    @if (data().rows.length) {
+      <div class="toolbar">
+        <label class="search"><span>Search {{ title() }}</span><input type="search" [ngModel]="query()" (ngModelChange)="search($event)" placeholder="Filter any column…"></label>
+        @if (stateColumn() >= 0) {
+          <label><span>{{ data().columns[stateColumn()].label }}</span><select [ngModel]="stateFilter()" (ngModelChange)="filterState($event)" [attr.aria-label]="'Filter ' + title() + ' by ' + data().columns[stateColumn()].label"><option value="">All states</option>@for (value of states(); track value) { <option [value]="value">{{ value }}</option> }</select></label>
+        }
+        @if (query() || stateFilter()) { <button matButton (click)="clear()">Clear filters</button> }
+      </div>
+      <div class="table-scroll" tabindex="0" role="region" [attr.aria-label]="title() + ' results'">
+        <table><caption>{{ title() }}</caption><thead><tr>
+          @for (column of data().columns; track $index; let index = $index) {
+            <th scope="col" [attr.aria-sort]="sort().column === index ? (sort().descending ? 'descending' : 'ascending') : 'none'">
+              <button type="button" (click)="sortBy(index)" [attr.aria-label]="'Sort by ' + column.label">{{ column.label }} <span aria-hidden="true">{{ sort().column === index ? (sort().descending ? '↓' : '↑') : '↕' }}</span></button>
+            </th>
+          }
+          @if (actionLabel()) { <th scope="col">Actions</th> }
+        </tr></thead><tbody>
+          @for (row of visible(); track $index) { <tr>
+            @for (cell of row; track $index; let index = $index) {
+              <td [class.numeric]="data().columns[index].kind === 'number' || data().columns[index].kind === 'size'">
+                @if (data().columns[index].kind === 'state' && cell) { <span class="pill" [class]="tone(cell)">{{ cell }}</span> }
+                @else if (cell.length > 240) { <details class="long-value"><summary>{{ cell.slice(0, 120) }}…</summary><div>{{ cell }}</div></details> }
+                @else { {{ cell || '—' }} }
+              </td>
+            }
+            @if (actionLabel()) { <td><button matButton [disabled]="actionsDisabled()" (click)="selected.emit(row)" [attr.aria-label]="actionLabel() + ' ' + row[0]">{{ actionLabel() }}</button></td> }
+          </tr> }
+        </tbody></table>
+        @if (!filtered().length) { <p class="empty">No records match your filters.</p> }
+      </div>
+      <footer><span aria-live="polite">{{ filtered().length ? start() + 1 : 0 }}–{{ end() }} of {{ filtered().length }}@if (filtered().length !== data().rows.length) { ({{ data().rows.length }} total) }</span>
+        <label>Rows per page <select [ngModel]="pageSize()" (ngModelChange)="resize($event)"><option [ngValue]="25">25</option><option [ngValue]="50">50</option><option [ngValue]="100">100</option></select></label>
+        <button matButton [disabled]="currentPage() === 0" (click)="page.set(currentPage() - 1)" [attr.aria-label]="'Previous page of ' + title()">Previous</button>
+        <span>Page {{ currentPage() + 1 }} / {{ pages() }}</span>
+        <button matButton [disabled]="currentPage() + 1 >= pages()" (click)="page.set(currentPage() + 1)" [attr.aria-label]="'Next page of ' + title()">Next</button>
+      </footer>
+    } @else if (!data().unparsed.length) { <p class="empty">No records returned.</p> }
+    @if (data().unparsed.length) { <details class="diagnostics"><summary>{{ data().unparsed.length }} lines could not be represented as table rows</summary><pre>{{ data().unparsed.join('\n') }}</pre></details> }
+  }
+  <details class="diagnostics"><summary>{{ section().status === 'ok' ? 'Original output' : 'Technical details' }}</summary><pre>{{ section().output || 'No output returned.' }}</pre></details>
+</article>

@@ -1,0 +1,51 @@
+{
+  "name": "tower-desktop",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "root": "apps/desktop/tower-desktop",
+  "targets": {
+    "test-terminal": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/desktop/tower-desktop/src-tauri",
+        "command": "cargo test live_terminal -- --ignored --nocapture"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/desktop/tower-desktop/src-tauri",
+        "command": "cargo test"
+      }
+    },
+    "test-ssh": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/desktop/tower-desktop/src-tauri",
+        "command": "cargo test live_ssh -- --ignored --nocapture"
+      }
+    },
+    "check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/desktop/tower-desktop/src-tauri",
+        "command": "cargo clippy --all-targets -- -D warnings"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/desktop/tower-desktop",
+        "command": "pnpm exec tauri build --no-bundle"
+      }
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "continuous": true,
+      "options": {
+        "cwd": "apps/desktop/tower-desktop",
+        "command": "pnpm exec tauri dev"
+      }
+    }
+  }
+}

@@ -1,0 +1,103 @@
+<section class="firewall" aria-label="Firewall inspection">
+  <header class="intro"><div><h2>Firewall inspection</h2><p>Explore rules, policies and zone configuration.</p></div><span class="readonly">Read-only</span></header>
+  <p class="context">{{ readable() }} of {{ tools.length }} sources readable. These views can overlap; their rule counts are not additive and do not establish end-to-end connectivity.</p>
+  <nav class="sources" aria-label="Firewall sources">
+    @for (model of models(); track model.section.id; let index = $index) {
+      <button type="button" [attr.aria-pressed]="current().section.id === model.section.id" (click)="choose(model.section.id)">
+        <strong>{{ model.label }}</strong><span>{{ tools[index].description }}</span><small [class.limited]="model.section.status !== 'ok' || model.problem || model.section.truncated">{{ status(model) }}</small>
+      </button>
+    }
+  </nav>
+  @let model = current();
+  <div class="workspace">
+    <header class="source-heading"><h3>{{ model.label }}</h3><span>{{ status(model) }}</span></header>
+    @if (model.section.status !== 'ok' || model.problem) {
+      <div class="empty"><h4>{{ status(model) }}</h4><p>{{ reason(model) }}</p>
+        @if (model.section.status === 'denied' || model.section.status === 'error') { <button matButton="tonal" [disabled]="busy() || !canInspect()" (click)="inspect.emit()">Review privileged inspection</button> }
+      </div>
+    } @else {
+      @if (model.section.truncated) { <p class="warning">Partial snapshot: output was truncated. Counts, filters and rules apply only to the captured portion.</p> }
+      <div class="summary"><div><span>{{ model.section.id === 'firewalld' ? 'Zones' : 'Chains / directions' }}</span><strong>{{ model.scopes.length }}</strong></div><div><span>{{ model.section.id === 'firewalld' ? 'Configuration entries' : 'Captured rules' }}</span><strong>{{ model.rules.length }}</strong></div><div><span>Additional objects</span><strong>{{ model.objects.length }}</strong></div></div>
+      @if (model.properties.length) { <dl class="properties">@for (property of model.properties; track $index) { <div><dt>{{ property[0] }}</dt><dd>{{ property[1] }}</dd></div> }</dl> }
+      @if (model.section.id === 'firewalld') { <p class="context">Runtime zone configuration. Services, ports and rich rules are separate entries; zone targets and rule priorities affect the result.</p> }
+      <div class="filters">
+        <label class="search">Search rules<input type="search" placeholder="Address, port, interface, comment…" [ngModel]="query()" (ngModelChange)="query.set($event); resetPage()"></label>
+        <label>Chain / zone<select [ngModel]="scope()" (ngModelChange)="chooseScope($event)"><option value="">All chains / zones</option>@for (item of model.scopes; track item.key) { <option [value]="item.key">{{ item.family }} {{ item.table }} / {{ item.name }}</option> }</select></label>
+        <label>Action<select [ngModel]="action()" (ngModelChange)="action.set($event); resetPage()"><option value="">All actions</option>@for (value of actions(); track value) { <option [value]="value">{{ value }}</option> }</select></label>
+        @if (query() || scope() || action()) { <button matButton (click)="clear()">Clear firewall filters</button> }
+      </div>
+      @if (model.scopes.length) {
+        <details class="chains" [open]="!grouped() && model.scopes.length <= 6"><summary>{{ model.section.id === 'firewalld' ? 'Zones & targets' : 'Chains & policies' }} · {{ model.scopes.length }}</summary>
+          <div class="chain-grid">@for (item of model.scopes; track item.key) { <button type="button" [attr.aria-pressed]="scope() === item.key" (click)="chooseScope(scope() === item.key ? '' : item.key)">
+            <span>{{ item.family }} {{ item.table }}</span><strong>{{ item.name }}</strong><small>{{ scopeCount(item.key) }} entries@if (item.hook) { · Hook {{ item.hook }} }@if (item.priority) { · Priority {{ item.priority }} }</small>
+            <span class="policy">{{ model.section.id === 'firewalld' ? 'Target' : 'Policy' }}: <b>{{ item.policy || (model.section.id === 'firewalld' ? 'Not reported' : 'Not specified / user chain') }}</b></span>
+          </button> }</div>
+        </details>
+      }
+      @if (selectedScope(); as selected) {
+        <aside class="scope-detail"><h4>{{ selected.family }} {{ selected.table }} / {{ selected.name }}</h4>
+          <p>{{ model.section.id === 'firewalld' ? 'Zone target' : 'Default policy' }}: <strong>{{ selected.policy || 'No explicit policy reported' }}</strong>@if (selected.hook) { · Hook {{ selected.hook }} · Priority {{ selected.priority || 'not reported' }} }</p>
+          @if (selected.attributes.length) { <dl class="properties">@for (property of selected.attributes; track $index) { <div><dt>{{ property[0] }}</dt><dd>{{ property[1] }}</dd></div> }</dl> }
+        </aside>
+      }
+      @if (grouped()) {
+        <div class="view-options">
+          <label><input type="checkbox" [ngModel]="showInterfaces()" (ngModelChange)="showInterfaces.set($event)"> Interfaces</label>
+          <label><input type="checkbox" [ngModel]="showCounters()" (ngModelChange)="showCounters.set($event)"> Traffic counters</label>
+          <button matButton (click)="collapsed.set([])">Expand chains</button>
+          <button matButton (click)="collapsed.set(current().scopes.map(scopeKey))">Collapse chains</button>
+          @if (history().length) { <button matButton (click)="back()">Back to previous chain view</button> }
+        </div>
+      }
+      <div class="rule-heading"><h4>{{ model.section.id === 'firewalld' ? 'Zone entries' : 'Rules' }} <span>{{ rows().length }} / {{ model.rules.length }}</span></h4>
+        @if (order().key !== 'order' || order().descending) { <button matButton (click)="restoreOrder()">Restore rule order</button> }
+      </div>
+      <p class="context">Order is the original position within each chain. Sorting only changes this view.@if (grouped()) { Rules stay grouped by table and chain; sorting applies within each chain. } A dash means the summary did not extract that field; open Details for all conditions.</p>
+      @if (model.rules.length || (grouped() && model.scopes.length)) {
+        <div class="table-scroll" tabindex="0" role="region" aria-label="Firewall rule results"><table>
+          <caption>{{ model.label }} rules</caption><thead><tr>@for (column of columns(); track column.key) { <th scope="col" [attr.aria-sort]="order().key === column.key ? (order().descending ? 'descending' : 'ascending') : 'none'"><button type="button" (click)="sort(column.key)" [attr.aria-label]="'Sort firewall by ' + column.label">{{ column.label }} <span aria-hidden="true">{{ order().key === column.key ? (order().descending ? '↓' : '↑') : '↕' }}</span></button></th> }<th scope="col">Inspect</th></tr></thead>
+          @for (group of groups(); track group.scope?.key ?? 'all') {
+          <tbody>
+            @if (group.scope; as chain) {
+              <tr class="chain-heading"><th scope="rowgroup" [attr.colspan]="columns().length + 1">
+                <div><button class="chain-toggle" type="button" [attr.aria-expanded]="!collapsed().includes(chain.key)" (click)="toggleChain(chain.key)">{{ collapsed().includes(chain.key) ? '▸' : '▾' }} {{ chain.name }}</button><span>{{ chain.family }} · {{ chain.table }}</span><span class="verdict" [class]="tone(chain.policy)">{{ chain.policy ? 'Policy: ' + chain.policy : 'No default policy / user chain' }}</span></div>
+                <small>{{ group.rows.length }} shown · {{ group.matches }} matching / {{ scopeCount(chain.key) }} captured rules</small>
+              </th></tr>
+              @if (!collapsed().includes(chain.key) && !group.rows.length) { <tr><td [attr.colspan]="columns().length + 1">No rules captured in this chain.@if (chain.policy) { Default policy: {{ chain.policy }}. }</td></tr> }
+            }
+            @if (!group.scope || !collapsed().includes(group.scope.key)) {
+            @for (row of group.rows; track row.id) {
+            <tr [class.selected]="expanded() === row.id">
+              @for (column of columns(); track column.key) {
+                <td>
+                  @switch (column.key) {
+                    @case ('action') {
+                      @if (grouped() && targetScope(row)) { <button matButton class="jump-link" (click)="follow(row)" [attr.aria-label]="'Follow ' + row.action">{{ row.action }}</button> }
+                      @else { <span class="verdict" [class]="tone(row.action)">{{ row.action }}</span> }
+                      @if (grouped() && row.comment) { <small>{{ row.comment }}</small> }
+                    }
+                    @case ('chain') { <strong>{{ row.chain }}</strong><small>{{ row.family }} {{ row.table }}</small> }
+                    @default { {{ grouped() ? match('' + (row[column.key] ?? '')) : (row[column.key] || '—') }} }
+                  }
+                </td>
+              }
+              <td><button matButton [attr.aria-expanded]="expanded() === row.id" [attr.aria-controls]="'firewall-rule-' + row.id" [attr.aria-label]="'Details for ' + row.chain + ' rule ' + row.order" (click)="toggle(row)">Details</button></td>
+            </tr>
+            @if (expanded() === row.id) { <tr class="detail-row"><td [attr.colspan]="columns().length + 1" [id]="'firewall-rule-' + row.id"><div class="rule-detail"><h4>{{ row.chain }} · Rule {{ row.order }}</h4>
+              @if (row.handle) { <p><strong>Handle:</strong> {{ row.handle }}</p> }@if (row.comment) { <p><strong>Comment:</strong> {{ row.comment }}</p> }@if (row.counters) { <p><strong>Counter:</strong> {{ row.counters }}</p> }
+              <h5>Conditions & statements</h5><ol>@for (condition of row.conditions; track $index) { <li>{{ condition }}</li> }</ol>
+              <details><summary>Exact rule definition</summary><pre>{{ row.raw }}</pre></details>
+            </div></td></tr> }
+          }
+          }</tbody>
+        }
+        </table></div>
+        @if (model.rules.length && !rows().length) { <p class="empty">No firewall rules match these filters.</p> }
+        <footer><span aria-live="polite">Page {{ currentPage() + 1 }} / {{ pages() }} · {{ rows().length }} matching entries</span><label>Rules per page<select [ngModel]="pageSize()" (ngModelChange)="pageSize.set(+$event); resetPage()"><option [ngValue]="25">25</option><option [ngValue]="50">50</option><option [ngValue]="100">100</option></select></label><button matButton [disabled]="currentPage() === 0" (click)="page.set(currentPage() - 1); expanded.set(null)">Previous rules</button><button matButton [disabled]="currentPage() + 1 >= pages()" (click)="page.set(currentPage() + 1); expanded.set(null)">Next rules</button></footer>
+      } @else { <p class="empty">No rule entries were captured from this source. Review its policies, status and any diagnostics; this is not a conclusion about host protection.</p> }
+      @if (model.objects.length) { <details class="objects"><summary>Tables, sets & additional objects · {{ model.objects.length }}</summary>@for (object of model.objects; track $index) { <details><summary><strong>{{ object.type }} · {{ object.name }}</strong> {{ object.context }}</summary><pre>{{ object.raw }}</pre></details> }</details> }
+    }
+    @if (model.diagnostics.length) { <details class="diagnostics"><summary>{{ model.diagnostics.length }} unrecognized entries · inspect before drawing conclusions</summary><pre>{{ model.diagnostics.join('\n') }}</pre></details> }
+    <details class="diagnostics"><summary>{{ model.section.status === 'ok' ? 'Original output' : 'Diagnostic details' }}</summary><pre>{{ model.section.output || 'No output was captured.' }}</pre></details>
+  </div>
+</section>

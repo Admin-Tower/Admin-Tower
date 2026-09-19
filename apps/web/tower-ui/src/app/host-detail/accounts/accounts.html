@@ -1,0 +1,51 @@
+<section aria-label="Users and groups explorer">
+  <header><div><h2>Users & groups</h2><p>Inspect accounts and follow their membership relationships.</p></div></header>
+  <div class="stats"><div><strong>{{ users().length }}</strong><span>Captured users</span></div><div><strong>{{ groups().length }}</strong><span>Captured groups</span></div><div><strong>{{ rootCount() }}</strong><span>Accounts with UID 0</span></div></div>
+  <p class="hint">Membership counts reflect this snapshot. Shell values do not establish whether an account can authenticate; password and sudo policy are not collected.</p>
+  @for (data of datasets(); track data.section.id) {
+    @if (data.section.status !== 'ok' || data.section.truncated || data.parsed.unparsed.length) {
+      <p class="notice">{{ data.section.id === 'users' ? 'Users' : 'Groups' }}: {{ status(data.section) }}@if (data.section.truncated || data.parsed.unparsed.length) { · Partial data }. Membership relationships may be incomplete.</p>
+    }
+  }
+  @if (selectedUser(); as user) {
+    <aside class="detail" tabindex="-1" data-account-detail aria-label="User details">
+      <header><h3>{{ user.name }} <span class="badge">UID {{ user.uid }}</span></h3><button matButton (click)="selected.set(null)">Close details</button></header>
+      <dl><div><dt>Description</dt><dd>{{ user.description || 'Not reported' }}</dd></div><div><dt>Home directory</dt><dd>{{ user.home || 'Not reported' }}</dd></div><div><dt>Shell</dt><dd>{{ user.shell || 'Not reported' }}</dd></div></dl>
+      <h4>Primary group · GID {{ user.gid }}</h4>
+      <div class="chips">@for (group of primary(user); track group.name) { <button matButton="tonal" (click)="select('groups', group.name)">{{ group.name }}</button> } @empty { <span>Group name unavailable in this snapshot.</span> }</div>
+      <h4>Supplementary groups · {{ supplementary(user).length }}</h4>
+      <div class="members">@for (group of supplementary(user); track group.name) { <div><button matButton (click)="select('groups', group.name)">{{ group.name }}</button><button matButton [disabled]="!canManage()" (click)="membership(user.name, group.name, false)" [attr.aria-label]="'Review removing ' + user.name + ' from ' + group.name">Review removal</button></div> } @empty { <p>No supplementary memberships captured.</p> }</div>
+      <form (ngSubmit)="membership(user.name, addName, true)"><label>Add to supplementary group<select name="addGroup" [(ngModel)]="addName" required><option value="">Choose a group</option>@for (group of addGroups(); track group.name) { <option [value]="group.name">{{ group.name }} · GID {{ group.gid }}</option> }</select></label><button matButton="tonal" [disabled]="!canManage() || !addName">Review addition</button></form>
+      <p class="hint">Primary membership is separate and cannot be removed here. Changes are reviewed before opening the external terminal.</p>
+    </aside>
+  }
+  @if (selectedGroup(); as group) {
+    <aside class="detail" tabindex="-1" data-account-detail aria-label="Group details">
+      <header><h3>{{ group.name }} <span class="badge">GID {{ group.gid }}</span></h3><button matButton (click)="selected.set(null)">Close details</button></header>
+      <h4>Primary members · {{ primaryMembers(group).length }}</h4>
+      <div class="chips">@for (user of primaryMembers(group); track user.name) { <button matButton="tonal" (click)="select('users', user.name)">{{ user.name }}</button> } @empty { <p>No primary members captured.</p> }</div>
+      <h4>Supplementary member list · {{ group.members.length }}</h4>
+      <div class="members">@for (name of group.members; track name) { <div>
+        @if (knownUser(name)) { <button matButton (click)="select('users', name)">{{ name }}</button> } @else { <span>{{ name }} · account not captured</span> }
+        @if (isPrimary(name, group)) { <span class="badge">Also primary member</span> } @else {
+          <button matButton [disabled]="!canManage() || !knownUser(name)" (click)="membership(name, group.name, false)" [attr.aria-label]="'Review removing ' + name + ' from ' + group.name">Review removal</button>
+        }
+      </div> } @empty { <p>No supplementary members captured.</p> }</div>
+      <form (ngSubmit)="membership(addName, group.name, true)"><label>Add supplementary member<select name="addUser" [(ngModel)]="addName" required><option value="">Choose a user</option>@for (user of addUsers(); track user.name) { <option [value]="user.name">{{ user.name }} · UID {{ user.uid }}</option> }</select></label><button matButton="tonal" [disabled]="!canManage() || !addName">Review addition</button></form>
+      <p class="hint">Primary memberships cannot be removed here. Changes require review and authentication in the external terminal.</p>
+    </aside>
+  }
+  <nav aria-label="Account views"><button matButton [attr.aria-pressed]="mode() === 'users'" (click)="choose('users')">Users ({{ users().length }})</button><button matButton [attr.aria-pressed]="mode() === 'groups'" (click)="choose('groups')">Groups ({{ groups().length }})</button></nav>
+  <div class="filters"><label class="search">Search {{ mode() }}<input type="search" placeholder="Name, ID, group or member…" [ngModel]="query()" (ngModelChange)="query.set($event); page.set(0)"></label>
+    <label>Show<select [ngModel]="filter()" (ngModelChange)="filter.set($event); page.set(0)"><option value="">All {{ mode() }}</option>@if (mode() === 'users') { <option value="root">UID 0 accounts</option><option value="shell">nologin / false shells</option> } @else { <option value="empty">No captured members</option> }</select></label>
+    @if (query() || filter()) { <button matButton (click)="clear()">Clear account filters</button> }
+  </div>
+  @if (current().section.status === 'ok') {
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Account results"><table><caption>{{ mode() === 'users' ? 'Users' : 'Groups' }}</caption><thead><tr>@for (label of headers(); track label; let i = $index) { <th scope="col" [attr.aria-sort]="sortColumn() === i ? (descending() ? 'descending' : 'ascending') : 'none'"><button type="button" (click)="sort(i)">{{ label }} {{ sortColumn() === i ? (descending() ? '↓' : '↑') : '↕' }}</button></th> }</tr></thead>
+      <tbody>@for (row of visible(); track row.cells[0]) { <tr [class.selected]="selected()?.kind === mode() && selected()?.name === row.cells[0]">@for (cell of row.cells; track $index; let i = $index) { <td>@if (i === 0) { <button matButton (click)="select(mode(), cell)">{{ cell }}</button> } @else { {{ cell }} }</td> }</tr> }</tbody>
+    </table></div>
+    @if (!rows().length) { <p class="empty">{{ query() || filter() ? 'No accounts match these filters.' : 'No entries were captured from this source.' }}</p> }
+    <footer><span aria-live="polite">{{ rows().length }} matching {{ mode() }} · Page {{ currentPage() + 1 }} / {{ pages() }}</span><label>Rows per page<select [ngModel]="size()" (ngModelChange)="size.set(+$event); page.set(0)"><option [ngValue]="25">25</option><option [ngValue]="50">50</option><option [ngValue]="100">100</option></select></label><button matButton [disabled]="currentPage() === 0" (click)="page.set(currentPage() - 1)">Previous accounts</button><button matButton [disabled]="currentPage() + 1 >= pages()" (click)="page.set(currentPage() + 1)">Next accounts</button></footer>
+  } @else { <p class="empty">{{ status(current().section) }}. Refresh the host to try collecting this source again.</p> }
+  <details class="diagnostics"><summary>Collection details & original output</summary>@for (data of datasets(); track data.section.id) { <h4>{{ data.section.id }} · {{ status(data.section) }}</h4>@if (data.parsed.unparsed.length) { <p>{{ data.parsed.unparsed.length }} unrecognized entries retained below.</p> }<pre>{{ data.section.output || 'No output captured.' }}</pre> }</details>
+</section>

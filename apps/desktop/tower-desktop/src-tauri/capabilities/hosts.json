@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "hosts",
+  "description": "Local Linux main window only; no remote origins or generic shell/filesystem access.",
+  "platforms": ["linux"],
+  "local": true,
+  "windows": ["main"],
+  "permissions": ["manage-hosts"]
+}

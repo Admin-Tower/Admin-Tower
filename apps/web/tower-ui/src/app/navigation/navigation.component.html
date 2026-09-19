@@ -1,12 +1,13 @@
 <mat-sidenav-container class="sidenav-container">
     <mat-sidenav #drawer class="sidenav" fixedInViewport aria-label="Main navigation"
                  [attr.role]="'navigation'"
-                 [mode]="'side'"
-                 [opened]=true>
+                 [mode]="compact() ? 'over' : 'side'"
+                 [opened]="!compact()">
         <mat-toolbar>Admin Tower</mat-toolbar>
         <mat-divider></mat-divider>
         <mat-nav-list aria-label="Main navigation">
             <a mat-list-item routerLink="/" (click)="drawer.close()">Home</a>
+            <a mat-list-item routerLink="/hosts" (click)="drawer.close()">Hosts</a>
         </mat-nav-list>
         <mat-divider class="absolute inset-y-0 end-0 pointer-events-none" [vertical]="true"></mat-divider>
     </mat-sidenav>
