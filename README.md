@@ -81,6 +81,86 @@ These controls protect the app's credential boundary, not a compromised Linux
 account or modified system executables. Keep the desktop account, agent, terminal,
 and OpenSSH installation trusted. See [Tauri capabilities](https://v2.tauri.app/security/capabilities/).
 
+## Automation catalog (Linux desktop)
+
+The sidenav separates **Hosts**, **Groups**, and **Automation**. Select individual
+rows in Hosts and group cards in Groups; these independent choices stay in the
+application session while navigating. Deselecting a group does not discard an
+individually selected host or another selected group. Shared members run once.
+Hosts included through selected groups are identified on their inventory rows.
+
+In **Automation**, click the **Ping** card to immediately start the task on the
+session selection and open its results. The **▶ Run Ping** button on Hosts and
+Groups provides the same one-click action. **Results & details** opens the task
+without starting anything. There is no separate target picker or second Run
+step after choosing the card. The catalog shows the selected host/group counts
+and total unique hosts.
+
+Selections are consumed only after the backend accepts the run. Missing Ansible,
+stale targets, and an already active run leave the selection intact for retry.
+Choices added while a start is pending remain available for the next run. The
+active run keeps its original snapshot, independently of later navigation,
+selection changes, group edits, or cancellation. Results remain available for
+the application session. Selections and results are not persistent run history.
+
+Groups owns the group cards, overlap summaries, creation, editing and deletion.
+**New group** opens a focused membership editor using the existing Hosts rows;
+**Save as group** on Hosts starts that editor from the selected host rows.
+Membership editing uses a separate draft and never replaces the session's
+automation selection. Group cards link to member hosts and intersections with
+other groups. Host search and these filters do not change execution targets.
+
+Deleting a group preserves its hosts and removes that group's explicit selection;
+deleting a host removes its memberships and explicit selection. Inventory format
+2 stores group IDs, names and member host IDs. Version 1 inventories load without
+groups and migrate atomically on the next successful write.
+
+The desktop runs `/usr/bin/ansible` locally (validated with ansible-core 2.20.1).
+It does not install dependencies. Targets need SSH public-key authentication and
+Python supported by your installed ansible-core. This uses
+[`ansible.builtin.ping`](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/ping_module.html):
+SSH login and Python execution must return `pong`. It is **not ICMP/network ping**.
+
+Ansible reuses each host's selected key reference or individual agent identity,
+custom port and strict host-key checks. Authentication is noninteractive: load
+an unlocked key into an agent outside Admin-Tower and select that identity if
+your key requires a passphrase. Establish verified server trust outside the app.
+A preparation failure affects only that host; valid members continue.
+
+On desktop startup, Admin-Tower automatically runs Ping once against all saved hosts.
+The check runs in the background without changing your selection or opening another
+page. Empty inventories are skipped; navigation does not trigger another check.
+
+Only one run may be active. The backend resolves all selected IDs in one locked
+inventory read, rejects missing hosts or groups, deduplicates by host ID, and
+snapshots membership and host
+settings at start, so subsequent edits do not retarget it. The Ping task page
+shows progress, elapsed time, cancellation, per-host outcomes and expandable
+diagnostics. Missing or malformed results are failures. The latest run lives in
+backend memory across navigation and is discarded when the app exits; no run
+history is persisted. Hosts also shows a compact Ping indicator on each row,
+updated once per second while the latest run is active. Expand it for diagnostics
+or open the full run. These are results of the latest SSH/Python check, not live
+network availability: hosts outside that run show Not checked, and edited host
+settings invalidate the displayed result. Cancel and normal app exit kill the local process group.
+
+Execution uses a private temporary inventory with internal aliases, five forks,
+a 15-second SSH connection timeout, a 60-second task timeout, and a ten-minute
+overall limit. Local output/result files are capped at 1 MiB each and displayed
+diagnostics at 16,384 characters. Temporary files and public identity references
+are removed after completion. An empty inherited environment, private HOME,
+application-controlled configuration and plugin paths isolate Ansible from user
+configuration. Only builtin ping over SSH is exposed: no arbitrary commands,
+playbooks, privilege escalation, group variables, scheduling or nested groups.
+
+`pnpm nx run tower-desktop:test-ansible` runs the real Ansible runner against a
+disposable loopback SSH server using generated keys and a separate SSH agent.
+It requires `/usr/bin/ansible`, OpenSSH tools, `/usr/bin/python3` with Paramiko,
+and loopback/Unix sockets. Its opt-in fixture executes the pipelined ping module
+with a fixed local Python interpreter; it never executes received shell commands
+or contacts production hosts. Browser group tests use mocked native IPC and
+provide separate evidence for UI behavior.
+
 ## Host administration (Ubuntu/Debian)
 
 Select a host's name in **Hosts** to open its administration page. The first
@@ -231,6 +311,7 @@ pnpm nx e2e tower-ui-e2e
 pnpm nx test tower-desktop
 pnpm nx run tower-desktop:check
 pnpm nx run tower-desktop:test-ssh
+pnpm nx run tower-desktop:test-ansible
 pnpm nx run tower-desktop:test-terminal
 pnpm nx build tower-desktop
 ```

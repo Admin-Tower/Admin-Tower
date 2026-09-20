@@ -72,7 +72,7 @@ fn inventory_roundtrip_preserves_identity_and_permissions() {
 #[test]
 fn malformed_and_future_inventory_are_never_overwritten() {
     let (_root, _env, store) = fixture();
-    for bytes in [b"{bad json".as_slice(), b"{\"version\":2,\"hosts\":[]}"] {
+    for bytes in [b"{bad json".as_slice(), b"{\"version\":99,\"hosts\":[]}"] {
         write_private(&store.directory.join("hosts.json"), bytes);
         assert!(store.list().is_err());
         assert!(store.save(None, settings()).is_err());
@@ -717,4 +717,326 @@ fn live_ssh_htop_streams_real_viewer_resizes_and_stops() {
         .unwrap();
     sessions.stop(&id).unwrap();
     assert!(sessions.poll(&id).is_err());
+}
+
+#[test]
+fn groups_migrate_atomically_and_preserve_settings_and_memberships() {
+    let (_root, _env, store) = fixture();
+    let mut input = settings();
+    input.port = 2222;
+    input.address = "2001:db8::1".into();
+    let host = store.save(None, input).unwrap();
+    let path = store.directory.join("hosts.json");
+    let legacy = serde_json::json!({"version": 1, "hosts": [host]});
+    write_private(&path, &serde_json::to_vec(&legacy).unwrap());
+    assert!(store.groups().unwrap().is_empty());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&path).unwrap()).unwrap()["version"],
+        1
+    );
+    let a = store
+        .save_group(None, "A".into(), vec![host.id.clone()])
+        .unwrap();
+    let b = store
+        .save_group(None, "B".into(), vec![host.id.clone()])
+        .unwrap();
+    assert_eq!(store.groups().unwrap().len(), 2);
+    assert_eq!(store.get(&host.id).unwrap().settings.port, 2222);
+    assert_eq!(
+        store.get(&host.id).unwrap().settings.authentication,
+        host.settings.authentication
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&fs::read(&path).unwrap()).unwrap()["version"],
+        2
+    );
+    assert!(store
+        .save_group(None, "bad".into(), vec![host.id.clone(), host.id.clone()])
+        .is_err());
+    assert!(store
+        .save_group(None, "bad".into(), vec![uuid::Uuid::new_v4().to_string()])
+        .is_err());
+    store
+        .save_group(Some(a.id.clone()), "Renamed".into(), vec![host.id.clone()])
+        .unwrap();
+    let (_, snapshot) = store
+        .automation_snapshot(&crate::inventory::AutomationTargets {
+            host_ids: vec![],
+            group_ids: vec![a.id.clone()],
+        })
+        .unwrap();
+    store.delete_group(&a.id).unwrap();
+    assert_eq!(store.list().unwrap().len(), 1);
+    store.delete(&host.id).unwrap();
+    assert!(store.groups().unwrap()[0].member_ids.is_empty());
+    assert_eq!(store.groups().unwrap()[0].id, b.id);
+    assert_eq!(snapshot[0].settings.address, "2001:db8::1");
+}
+
+#[test]
+fn automation_targets_resolve_once_deduplicate_and_reject_stale_ids() {
+    use crate::inventory::AutomationTargets;
+    let (_root, _env, store) = fixture();
+    let first = store.save(None, settings()).unwrap();
+    let mut input = settings();
+    input.port = 2222;
+    input.address = "2001:db8::1".into();
+    // Identical display names remain distinct saved hosts.
+    let second = store.save(None, input).unwrap();
+    let a = store
+        .save_group(None, "A".into(), vec![first.id.clone()])
+        .unwrap();
+    let b = store
+        .save_group(None, "B".into(), vec![first.id.clone(), second.id.clone()])
+        .unwrap();
+    let targets = AutomationTargets {
+        host_ids: vec![first.id.clone(), first.id.clone()],
+        group_ids: vec![a.id.clone(), b.id.clone(), a.id.clone()],
+    };
+    let (label, snapshot) = store.automation_snapshot(&targets).unwrap();
+    assert_eq!(snapshot.len(), 2);
+    assert!(label.starts_with("A, B, "));
+    assert_eq!(snapshot[1].settings.port, 2222);
+    let direct = AutomationTargets {
+        host_ids: vec![second.id.clone()],
+        group_ids: vec![],
+    };
+    assert_eq!(
+        store.automation_snapshot(&direct).unwrap().1[0].id,
+        second.id
+    );
+    assert!(store
+        .automation_snapshot(&AutomationTargets::default())
+        .is_err());
+    let empty = store.save_group(None, "Empty".into(), vec![]).unwrap();
+    assert!(store
+        .automation_snapshot(&AutomationTargets {
+            host_ids: vec![],
+            group_ids: vec![empty.id]
+        })
+        .is_err());
+    let missing = uuid::Uuid::new_v4().to_string();
+    assert!(store
+        .automation_snapshot(&AutomationTargets {
+            host_ids: vec![missing.clone()],
+            group_ids: vec![a.id.clone()]
+        })
+        .is_err());
+    assert!(store
+        .automation_snapshot(&AutomationTargets {
+            host_ids: vec![first.id.clone()],
+            group_ids: vec![missing]
+        })
+        .is_err());
+    assert!(store
+        .automation_snapshot(&AutomationTargets {
+            host_ids: vec!["all".into()],
+            group_ids: vec![]
+        })
+        .is_err());
+    assert!(serde_json::from_value::<AutomationTargets>(
+        serde_json::json!({"hostIds": [], "groupIds": [], "command": "sh"})
+    )
+    .is_err());
+    store.delete_group(&a.id).unwrap();
+    store.delete(&second.id).unwrap();
+    assert!(store.automation_snapshot(&targets).is_err());
+    assert!(store.automation_snapshot(&direct).is_err());
+    assert_eq!(snapshot.len(), 2);
+    assert_eq!(snapshot[1].settings.address, "2001:db8::1");
+}
+
+#[test]
+#[ignore = "requires loopback sockets, /usr/bin/ansible and Python Paramiko; run test-ansible"]
+fn live_ansible_ping_isolated_mixed_results_snapshot_cancel_and_timeout() {
+    let (root, mut environment, store) = fixture();
+    assert!(crate::automation::availability()
+        .unwrap()
+        .contains("ansible"));
+    let key = environment.home.join(".ssh/key with spaces");
+    generate_key(&key, "");
+    let wrong = environment.home.join(".ssh/wrong");
+    generate_key(&wrong, "");
+    fs::copy(key.with_extension("pub"), root.path().join("client.pub")).unwrap();
+    fs::write(root.path().join("ansible-mode"), b"").unwrap();
+    let mut server = ChildGuard(
+        Command::new("/usr/bin/python3")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/ssh_server.py"))
+            .arg(root.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_for(&root.path().join("ready.json"), &mut server);
+    let ready: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join("ready.json")).unwrap()).unwrap();
+    let known_hosts = environment.home.join(".ssh/known_hosts");
+    write_private(
+        &known_hosts,
+        ready["knownHost"].as_str().unwrap().as_bytes(),
+    );
+    let socket = root.path().join("agent.sock");
+    let mut agent = ChildGuard(
+        Command::new("/usr/bin/ssh-agent")
+            .args(["-D", "-a"])
+            .arg(&socket)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_for(&socket, &mut agent);
+    for path in [&wrong, &key] {
+        assert!(Command::new("/usr/bin/ssh-add")
+            .arg(path)
+            .env("SSH_AUTH_SOCK", &socket)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success());
+    }
+    environment.agent_socket = Some(socket);
+    let fingerprint = parse_agent_keys(&fs::read_to_string(key.with_extension("pub")).unwrap())
+        .unwrap()[0]
+        .fingerprint
+        .clone();
+    let mut input = settings();
+    input.address = "127.0.0.1".into();
+    input.port = ready["port"].as_u64().unwrap() as u16;
+    input.username = "fixture".into();
+    input.authentication = Authentication::KeyFile {
+        filename: "key with spaces".into(),
+    };
+    let good = store.save(None, input.clone()).unwrap();
+    input.authentication = Authentication::Agent { fingerprint };
+    let agent_host = store.save(None, input.clone()).unwrap();
+    input.authentication = good.settings.authentication.clone();
+    input.username = "missingpython".into();
+    let no_python = store.save(None, input.clone()).unwrap();
+    input.username = "fixture".into();
+    input.authentication = Authentication::KeyFile {
+        filename: "wrong".into(),
+    };
+    let bad_auth = store.save(None, input.clone()).unwrap();
+    input.authentication = Authentication::KeyFile {
+        filename: "absent".into(),
+    };
+    let absent = store.save(None, input).unwrap();
+    let group = store
+        .save_group(
+            None,
+            "Mixed".into(),
+            vec![
+                good.id.clone(),
+                agent_host.id.clone(),
+                no_python.id.clone(),
+                bad_auth.id.clone(),
+                absent.id.clone(),
+            ],
+        )
+        .unwrap();
+    let automation = crate::automation::Automation::default();
+    let wait = |automation: &crate::automation::Automation| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let run = automation.latest().unwrap().unwrap();
+            if !run.active {
+                return run;
+            }
+            assert!(Instant::now() < deadline, "Run did not finish");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let overlapping = store
+        .save_group(None, "Overlap".into(), vec![good.id.clone()])
+        .unwrap();
+    let targets = crate::inventory::AutomationTargets {
+        host_ids: vec![good.id.clone()],
+        group_ids: vec![group.id.clone(), overlapping.id.clone()],
+    };
+    automation.start(&store, &environment, &targets).unwrap();
+    assert!(automation.start(&store, &environment, &targets).is_err());
+    // Once started, membership edits/deletions cannot alter targets or credentials.
+    store.delete(&absent.id).unwrap();
+    store
+        .save_group(Some(group.id.clone()), "Changed".into(), vec![])
+        .unwrap();
+    let result = wait(&automation);
+    assert_eq!(result.results.len(), 5);
+    assert!(result.target_label.starts_with("Mixed, Overlap, "));
+    let outcome = |id: &str| {
+        result
+            .results
+            .iter()
+            .find(|r| r.host.id == id)
+            .unwrap()
+            .outcome
+            .as_str()
+    };
+    assert_eq!(
+        outcome(&good.id),
+        "successful",
+        "{} / {}",
+        result.message,
+        result.results[0].diagnostics
+    );
+    assert_eq!(outcome(&agent_host.id), "successful", "{}", result.message);
+    assert_eq!(outcome(&no_python.id), "failed");
+    assert_eq!(outcome(&bad_auth.id), "unreachable");
+    assert_eq!(outcome(&absent.id), "failed");
+    // Scope cleanup checks to this test process, never other running applications.
+    let assert_clean = || {
+        let prefix = format!("admin-tower-ping-{}-", std::process::id());
+        assert!(!fs::read_dir("/tmp").unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(&prefix)));
+    };
+    assert_clean();
+    store
+        .save(Some(good.id.clone()), good.settings.clone())
+        .unwrap();
+    store
+        .save_group(
+            Some(group.id.clone()),
+            "Trust".into(),
+            vec![good.id.clone()],
+        )
+        .unwrap();
+    // A direct host target works without creating a one-member group.
+    let targets = crate::inventory::AutomationTargets {
+        host_ids: vec![good.id.clone()],
+        group_ids: vec![],
+    };
+    automation.start(&store, &environment, &targets).unwrap();
+    assert_eq!(wait(&automation).results[0].outcome, "successful");
+    write_private(&known_hosts, b"");
+    automation.start(&store, &environment, &targets).unwrap();
+    assert_eq!(wait(&automation).results[0].outcome, "unreachable");
+    assert!(fs::read(&known_hosts).unwrap().is_empty());
+    write_private(
+        &known_hosts,
+        ready["knownHost"].as_str().unwrap().as_bytes(),
+    );
+    let mut slow = good.settings.clone();
+    slow.username = "slow".into();
+    store.save(Some(good.id.clone()), slow).unwrap();
+    let run = automation.start(&store, &environment, &targets).unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    automation.cancel(&run.id).unwrap();
+    assert_eq!(wait(&automation).results[0].outcome, "cancelled");
+    assert_clean();
+    automation
+        .start_with_limit(&store, &environment, &targets, Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(wait(&automation).results[0].outcome, "timed-out");
+    assert_clean();
+    automation.start(&store, &environment, &targets).unwrap();
+    std::thread::sleep(Duration::from_millis(1500));
+    automation.shutdown();
+    assert!(automation.latest().unwrap().is_none());
+    assert_clean();
 }

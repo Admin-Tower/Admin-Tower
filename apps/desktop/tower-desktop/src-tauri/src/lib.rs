@@ -1,6 +1,8 @@
 #[cfg(target_os = "linux")]
 mod admin;
 #[cfg(target_os = "linux")]
+mod automation;
+#[cfg(target_os = "linux")]
 mod commands;
 #[cfg(target_os = "linux")]
 mod htop;
@@ -32,6 +34,13 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "linux")]
     let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::list_host_groups,
+        commands::save_host_group,
+        commands::delete_host_group,
+        commands::ansible_availability,
+        commands::start_ping,
+        commands::latest_ping,
+        commands::cancel_ping,
         commands::start_htop,
         commands::poll_htop,
         commands::input_htop,
@@ -53,14 +62,23 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             {
                 use tauri::Manager;
-                app.manage(std::sync::Arc::new(commands::Backend {
+                let backend = std::sync::Arc::new(commands::Backend {
                     store: inventory::Store {
                         directory: app.path().app_data_dir()?,
                     },
                     environment: ssh::Environment::current().map_err(std::io::Error::other)?,
                     operations: std::sync::Mutex::new(()),
                     htop: Default::default(),
-                }));
+                    automation: Default::default(),
+                });
+                // The runner spawns its worker immediately; SSH never blocks app setup.
+                if let Err(error) = backend
+                    .automation
+                    .startup(&backend.store, &backend.environment)
+                {
+                    log::warn!("Startup connectivity check could not start: {error}");
+                }
+                app.manage(backend);
             }
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -77,6 +95,9 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             if matches!(event, tauri::RunEvent::Exit) {
                 use tauri::Manager;
+                app.state::<std::sync::Arc<commands::Backend>>()
+                    .automation
+                    .shutdown();
                 app.state::<std::sync::Arc<commands::Backend>>()
                     .htop
                     .stop_all();

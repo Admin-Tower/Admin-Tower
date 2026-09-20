@@ -27,6 +27,8 @@ class Server(paramiko.ServerInterface):
         self.executed = threading.Event()
         self.size = (24, 80)
         self.master = None
+        self.command = b""
+        self.username = ""
 
     def get_allowed_auths(self, username):
         return "publickey"
@@ -34,7 +36,8 @@ class Server(paramiko.ServerInterface):
     def check_auth_publickey(self, username, key):
         with (directory / "attempts").open("a") as output:
             output.write(key.get_base64() + "\n")
-        if username == "fixture" and key.get_base64() == authorized:
+        self.username = username
+        if (username == "fixture" or ((directory / "ansible-mode").exists() and username in ("missingpython", "slow"))) and key.get_base64() == authorized:
             return paramiko.AUTH_SUCCESSFUL
         return paramiko.AUTH_FAILED
 
@@ -54,6 +57,10 @@ class Server(paramiko.ServerInterface):
         return True
 
     def check_channel_exec_request(self, channel, command):
+        self.command = command
+        if (directory / "ansible-mode").exists():
+            with (directory / "commands").open("ab") as output:
+                output.write(command + b"\n")
         (directory / "last-command").write_bytes(command)
         self.executed.set()
         return True
@@ -103,6 +110,43 @@ def stream_htop(channel, server):
         os.close(master)
 
 
+def stream_ansible(channel, server):
+    # Only the opt-in automation fixture executes code: a fixed Python interpreter
+    # receiving Ansible's pipelined module. Never execute the received SSH command.
+    command = server.command.decode()
+    if "echo FOUND" in command:
+        channel.sendall(b"FOUND\n/usr/bin/python3\nENDFOUND\n")
+        channel.send_exit_status(0)
+    elif server.username == "missingpython":
+        channel.send_stderr(b"/usr/bin/python3: not found\n")
+        channel.send_exit_status(127)
+    elif server.username == "slow":
+        time.sleep(8)
+        channel.send_exit_status(1)
+    elif "/usr/bin/python3" in command:
+        payload = bytearray()
+        channel.settimeout(10)
+        while True:
+            data = channel.recv(65536)
+            if not data:
+                break
+            payload.extend(data)
+            if len(payload) > 8 * 1024 * 1024:
+                raise OSError("Oversized fixture payload")
+        result = subprocess.run(
+            ["/usr/bin/python3"], input=bytes(payload), capture_output=True,
+            cwd=directory, env={"HOME": str(directory), "PATH": "/usr/bin:/bin"}, timeout=10,
+        )
+        channel.sendall(result.stdout)
+        channel.send_stderr(result.stderr)
+        channel.send_exit_status(result.returncode)
+    else:
+        channel.send_stderr(b"Unsupported fixture command\n")
+        channel.send_exit_status(1)
+    channel.shutdown_write()
+    time.sleep(0.1)
+
+
 def handle(client):
     transport = paramiko.Transport(client)
     try:
@@ -111,6 +155,9 @@ def handle(client):
         transport.start_server(server=server)
         channel = transport.accept(5)
         if channel is not None and server.executed.wait(5):
+            if (directory / "ansible-mode").exists():
+                stream_ansible(channel, server)
+                return
             if (directory / "htop-mode").exists():
                 stream_htop(channel, server)
                 return

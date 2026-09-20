@@ -46,6 +46,13 @@
         "cwd": "apps/desktop/tower-desktop",
         "command": "pnpm exec tauri dev"
       }
+    },
+    "test-ansible": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/desktop/tower-desktop/src-tauri",
+        "command": "cargo test live_ansible -- --ignored --nocapture"
+      }
     }
   }
 }

@@ -17,6 +17,8 @@ test.describe('inventory with mocked native IPC', () => {
             const hosts: Host[] = JSON.parse(localStorage.getItem('test-hosts') ?? '[]');
             switch (command) {
               case 'list_hosts': return hosts;
+              case 'list_host_groups': return [];
+              case 'latest_ping': return null;
               case 'list_identities': return { agentIdentities: [], keyFiles: ['id_ed25519'], agentError: 'No SSH agent is available.', keyError: null };
               case 'list_terminals': return [{ id: 'xterm', label: 'xterm' }];
               case 'inspect_host':

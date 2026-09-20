@@ -35,7 +35,7 @@ describe('NavigationComponent', () => {
     expect(drawer.mode).toBe('side');
     expect(drawer.opened).toBe(true);
     expect(fixture.nativeElement.querySelector('button')?.getAttribute('aria-expanded')).toBe('true');
-    expect(fixture.nativeElement.querySelector('a[href="/hosts"]')?.textContent).toContain('Hosts');
+    expect([...fixture.nativeElement.querySelectorAll('mat-nav-list a')].map((link: unknown) => (link as HTMLElement).textContent?.trim())).toEqual(['Hosts', 'Groups', 'Automation']);
   });
 
   it('switches to a closed overlay on narrow screens', async () => {

@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
-import { nftFixture } from '../../tower-ui/src/app/host-detail/firewall/firewall.fixture';
+// Shared static fixture keeps browser and parser regression cases consistent.
+// eslint-disable-next-line @nx/enforce-module-boundaries
+import { nftFixture } from '../../tower-ui/src/app/host-detail/firewall/firewall.fixture.js';
 
 test('explores firewall chains, rules and zones without changing the host', async ({ page }, testInfo) => {
   const sections = [

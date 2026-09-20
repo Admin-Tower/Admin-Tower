@@ -39,11 +39,28 @@ pub struct Host {
     pub settings: HostInput,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Group {
+    pub id: String,
+    pub name: String,
+    pub member_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutomationTargets {
+    pub host_ids: Vec<String>,
+    pub group_ids: Vec<String>,
+}
+
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Inventory {
     version: u32,
     hosts: Vec<Host>,
+    #[serde(default)]
+    groups: Vec<Group>,
 }
 
 pub fn uid() -> u32 {
@@ -235,8 +252,9 @@ impl Store {
         if matches!(fs::symlink_metadata(&path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
         {
             return Ok(Inventory {
-                version: 1,
+                version: 2,
                 hosts: vec![],
+                groups: vec![],
             });
         }
         let mut bytes = Vec::new();
@@ -247,9 +265,9 @@ impl Store {
         if bytes.len() as u64 > MAX_INVENTORY_BYTES {
             return Err("Inventory exceeds the size limit; file preserved.".into());
         }
-        let inventory: Inventory = serde_json::from_slice(&bytes)
+        let mut inventory: Inventory = serde_json::from_slice(&bytes)
             .map_err(|_| "Inventory is malformed; existing file was preserved. Restore a valid backup of hosts.json.")?;
-        if inventory.version != 1 {
+        if ![1, 2].contains(&inventory.version) {
             return Err("Unsupported inventory version; existing file preserved.".into());
         }
         let mut ids = HashSet::new();
@@ -260,6 +278,18 @@ impl Store {
                 return Err("Duplicate host IDs in inventory; existing file preserved.".into());
             }
         }
+        if inventory.version == 1 && !inventory.groups.is_empty() {
+            return Err("Version 1 inventory cannot contain groups.".into());
+        }
+        let mut group_ids = HashSet::new();
+        for group in &inventory.groups {
+            validate_id(&group.id)?;
+            validate_group(&group.name, &group.member_ids, &inventory.hosts)?;
+            if !group_ids.insert(&group.id) {
+                return Err("Duplicate group IDs in inventory.".into());
+            }
+        }
+        inventory.version = 2;
         Ok(inventory)
     }
 
@@ -323,7 +353,102 @@ impl Store {
         if before == inventory.hosts.len() {
             return Err("Host no longer exists.".into());
         }
+        for group in &mut inventory.groups {
+            group.member_ids.retain(|member| member != id);
+        }
         self.write(&inventory)
+    }
+
+    pub fn groups(&self) -> Result<Vec<Group>> {
+        let _lock = self.lock()?;
+        Ok(self.read()?.groups)
+    }
+
+    pub fn save_group(
+        &self,
+        id: Option<String>,
+        name: String,
+        member_ids: Vec<String>,
+    ) -> Result<Group> {
+        let _lock = self.lock()?;
+        let mut inventory = self.read()?;
+        let name = name.trim().to_owned();
+        validate_group(&name, &member_ids, &inventory.hosts)?;
+        let group = Group {
+            id: id
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            name,
+            member_ids,
+        };
+        if let Some(id) = id {
+            validate_id(&id)?;
+            *inventory
+                .groups
+                .iter_mut()
+                .find(|g| g.id == id)
+                .ok_or("Group no longer exists.")? = group.clone();
+        } else {
+            inventory.groups.push(group.clone());
+        }
+        self.write(&inventory)?;
+        Ok(group)
+    }
+
+    pub fn delete_group(&self, id: &str) -> Result<()> {
+        validate_id(id)?;
+        let _lock = self.lock()?;
+        let mut inventory = self.read()?;
+        let before = inventory.groups.len();
+        inventory.groups.retain(|g| g.id != id);
+        if before == inventory.groups.len() {
+            return Err("Group no longer exists.".into());
+        }
+        self.write(&inventory)
+    }
+
+    /// Resolve all IDs from one locked inventory read; shared hosts execute only once.
+    pub fn automation_snapshot(&self, targets: &AutomationTargets) -> Result<(String, Vec<Host>)> {
+        for id in targets.host_ids.iter().chain(&targets.group_ids) {
+            validate_id(id)?;
+        }
+        let _lock = self.lock()?;
+        let inventory = self.read()?;
+        let mut host_ids = HashSet::new();
+        let mut group_ids = HashSet::new();
+        let mut direct_ids = HashSet::new();
+        let mut names = Vec::new();
+        for id in &targets.group_ids {
+            let group = inventory
+                .groups
+                .iter()
+                .find(|group| &group.id == id)
+                .ok_or("A selected group no longer exists. Refresh targets.")?;
+            if group_ids.insert(id) {
+                names.push(group.name.clone());
+                host_ids.extend(group.member_ids.iter().cloned());
+            }
+        }
+        for id in &targets.host_ids {
+            let host = inventory
+                .hosts
+                .iter()
+                .find(|host| &host.id == id)
+                .ok_or("A selected host no longer exists. Refresh targets.")?;
+            if direct_ids.insert(id) {
+                names.push(host.settings.name.clone());
+                host_ids.insert(id.clone());
+            }
+        }
+        let hosts: Vec<Host> = inventory
+            .hosts
+            .into_iter()
+            .filter(|host| host_ids.contains(&host.id))
+            .collect();
+        if hosts.is_empty() {
+            return Err("Select at least one saved host or a nonempty group.".into());
+        }
+        Ok((names.join(", "), hosts))
     }
 
     pub fn get(&self, id: &str) -> Result<Host> {
@@ -333,4 +458,17 @@ impl Store {
             .find(|h| h.id == id)
             .ok_or("Host no longer exists.".into())
     }
+}
+
+fn validate_group(name: &str, members: &[String], hosts: &[Host]) -> Result<()> {
+    if name.trim().is_empty() || name.len() > 120 || name.chars().any(char::is_control) {
+        return Err("Group name must contain 1–120 bytes and no control characters.".into());
+    }
+    let mut seen = HashSet::new();
+    for id in members {
+        if !seen.insert(id) || !hosts.iter().any(|h| &h.id == id) {
+            return Err("Group members must be unique saved hosts. Refresh the inventory.".into());
+        }
+    }
+    Ok(())
 }

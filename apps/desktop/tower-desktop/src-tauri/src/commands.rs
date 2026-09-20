@@ -10,6 +10,7 @@ pub struct Backend {
     pub environment: Environment,
     pub operations: Mutex<()>,
     pub htop: crate::htop::Sessions,
+    pub automation: crate::automation::Automation,
 }
 
 async fn blocking<T: Send + 'static>(
@@ -98,8 +99,14 @@ mod tests {
                 },
                 operations: Mutex::new(()),
                 htop: Default::default(),
+                automation: Default::default(),
             }))
-            .invoke_handler(tauri::generate_handler![list_hosts, stop_htop])
+            .invoke_handler(tauri::generate_handler![
+                list_hosts,
+                stop_htop,
+                list_host_groups,
+                latest_ping
+            ])
             .build(tauri::generate_context!())
             .unwrap();
         let main = WebviewWindowBuilder::new(&app, "main", Default::default())
@@ -122,7 +129,7 @@ mod tests {
         } else {
             "tauri://localhost"
         };
-        for cmd in ["list_hosts", "stop_htop"] {
+        for cmd in ["list_hosts", "stop_htop", "list_host_groups", "latest_ping"] {
             assert!(get_ipc_response(&main, request(local, cmd)).is_ok());
             assert!(get_ipc_response(&other, request(local, cmd)).is_err());
             assert!(get_ipc_response(&main, request("https://untrusted.example", cmd)).is_err());
@@ -208,4 +215,51 @@ pub fn resize_htop(
 #[tauri::command]
 pub fn stop_htop(state: State<'_, Arc<Backend>>, session_id: String) -> Result<()> {
     state.htop.stop(&session_id)
+}
+
+#[tauri::command]
+pub async fn list_host_groups(
+    state: State<'_, Arc<Backend>>,
+) -> Result<Vec<crate::inventory::Group>> {
+    blocking(state.inner().clone(), |b| b.store.groups()).await
+}
+#[tauri::command]
+pub async fn save_host_group(
+    state: State<'_, Arc<Backend>>,
+    id: Option<String>,
+    name: String,
+    member_ids: Vec<String>,
+) -> Result<crate::inventory::Group> {
+    blocking(state.inner().clone(), move |b| {
+        b.store.save_group(id, name, member_ids)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn delete_host_group(state: State<'_, Arc<Backend>>, id: String) -> Result<()> {
+    blocking(state.inner().clone(), move |b| b.store.delete_group(&id)).await
+}
+#[tauri::command]
+pub async fn ansible_availability() -> Result<String> {
+    tauri::async_runtime::spawn_blocking(crate::automation::availability)
+        .await
+        .map_err(|_| "Availability check failed.")?
+}
+#[tauri::command]
+pub async fn start_ping(
+    state: State<'_, Arc<Backend>>,
+    targets: crate::inventory::AutomationTargets,
+) -> Result<crate::automation::Run> {
+    blocking(state.inner().clone(), move |b| {
+        b.automation.start(&b.store, &b.environment, &targets)
+    })
+    .await
+}
+#[tauri::command]
+pub fn latest_ping(state: State<'_, Arc<Backend>>) -> Result<Option<crate::automation::Run>> {
+    state.automation.latest()
+}
+#[tauri::command]
+pub fn cancel_ping(state: State<'_, Arc<Backend>>, run_id: String) -> Result<()> {
+    state.automation.cancel(&run_id)
 }

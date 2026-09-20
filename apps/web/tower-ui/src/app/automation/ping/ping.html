@@ -1,0 +1,83 @@
+<section aria-labelledby="ping-heading" class="mx-auto max-w-6xl">
+  <nav aria-label="Breadcrumb" class="mb-5 text-sm"><a routerLink="/automation">Automation</a><span class="mx-2 text-slate-400" aria-hidden="true">/</span><span aria-current="page">Ping</span></nav>
+  <header class="mb-7 flex flex-wrap items-start justify-between gap-4">
+    <div><h1 id="ping-heading" class="m-0 text-3xl font-semibold tracking-tight">Ping</h1>
+      <p class="mb-0 mt-2 text-[var(--tower-muted)]">Check SSH access and Python availability on selected hosts and groups.</p>
+    </div>
+    <a matButton [href]="task.documentation" target="_blank" rel="noopener noreferrer">Module documentation <span aria-hidden="true">↗</span><span class="sr-only"> (opens in a new tab)</span></a>
+  </header>
+  @if (!desktop) {
+    <div class="rounded-xl border border-[var(--tower-border)] bg-white p-6">
+      <h2 class="mt-0 text-lg font-semibold">Open Admin-Tower for Linux</h2>
+      <p class="mb-0 text-[var(--tower-muted)]">Run this task in the desktop app using your saved hosts, groups and local SSH identities.</p>
+    </div>
+  } @else {
+    <div class="grid items-start gap-6 lg:grid-cols-[minmax(260px,320px)_minmax(0,1fr)]">
+      <section aria-labelledby="targets-heading" class="min-w-0 rounded-xl border border-[var(--tower-border)] bg-white p-5">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-2"><h2 id="targets-heading" class="m-0 text-base font-semibold">Next selection</h2><a routerLink="/hosts"  class="text-xs">Hosts</a><a routerLink="/groups" class="text-xs">Groups</a></div>
+        @if (targetsError()) {
+          <p role="alert" class="break-words text-red-700">{{ targetsError() }}</p>
+          <button matButton (click)="refreshTargets()" [disabled]="loading()">Retry targets</button>
+        } @else if (loading()) {
+          <p role="status" class="text-[var(--tower-muted)]">Loading targets…</p>
+        } @else if (!selection.hasSelection()) {
+          <p class="text-sm text-[var(--tower-muted)]">Select hosts or groups, then click Ping in Automation to run.</p>
+          <a matButton="filled" routerLink="/hosts" >Select hosts</a>
+        } @else {
+          @if (selection.missingCount()) { <p role="alert" class="text-sm text-red-700">{{ selection.missingCount() }} selected targets are no longer available. Review your selection in the inventory before running.</p> }
+          <p role="status" class="text-sm"><strong>{{ targetHosts().length }} {{ targetHosts().length === 1 ? 'host' : 'hosts' }} targeted</strong></p>
+          <ul class="mb-5 max-h-64 list-none space-y-3 overflow-auto p-0" aria-label="Selected inventory hosts">
+            @for (host of targetHosts(); track host.id) {
+              <li class="break-words"><strong class="block text-sm">{{ host.settings.name }}</strong><span class="break-all text-xs text-[var(--tower-muted)]">{{ host.settings.username }}&#64;{{ host.settings.address }}:{{ host.settings.port }}</span></li>
+            }
+          </ul>
+          <button matButton="filled" class="w-full" (click)="start()" [disabled]="!canRun()">{{ pending() === 'start' ? 'Starting…' : 'Run ping' }}</button>
+          @if (run()?.active) { <p class="mb-0 text-xs text-[var(--tower-muted)]">A ping is running. Changes to your inventory selection apply to the next run.</p> }
+        }
+        @if (error()) { <p role="alert" class="mb-0 break-words text-sm text-red-700">{{ error() }}</p> }
+        <div class="mt-5 border-t border-[var(--tower-border)] pt-4 text-xs leading-relaxed text-[var(--tower-muted)]">
+          Uses your saved SSH identities and trusted host keys. Requires Ansible locally and Python on the remote hosts.
+        </div>
+      </section>
+      <section aria-labelledby="results-heading" class="min-w-0 overflow-hidden rounded-xl border border-[var(--tower-border)] bg-white">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--tower-border)] px-5 py-4">
+          <h2 id="results-heading" class="m-0 text-base font-semibold">Latest run</h2>
+          @if (run()?.active) { <button matButton (click)="cancel()" [disabled]="!!pending()">{{ pending() === 'cancel' ? 'Cancelling…' : 'Cancel run' }}</button> }
+        </div>
+        @if (pollError()) {
+          <div class="px-5 pt-4"><p role="alert" class="break-words text-red-700">Could not update the run: {{ pollError() }}</p><button matButton (click)="poll()">Retry results</button></div>
+        }
+        @if (run(); as latest) {
+          <div class="px-5 py-4">
+            <div class="flex flex-wrap items-center justify-between gap-2"><h3 class="m-0 text-lg font-semibold break-words">{{ latest.targetLabel }}</h3><span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium">{{ latest.active ? 'Running' : 'Finished' }}</span></div>
+            <p role="status" class="mb-2 mt-2 text-sm text-[var(--tower-muted)]">{{ completed() }} / {{ latest.results.length }} complete · {{ (latest.elapsedMs / 1000).toFixed(1) }} s</p>
+            <mat-progress-bar mode="determinate" [value]="completed() / (latest.results.length || 1) * 100" aria-label="Ping progress" />
+            <p class="mb-0 mt-2 flex flex-wrap gap-4 text-xs"><span class="text-emerald-700">{{ succeeded() }} successful</span>@if (needsAttention()) { <span class="text-amber-800">{{ needsAttention() }} {{ needsAttention() === 1 ? 'needs attention' : 'need attention' }}</span> }</p>
+          </div>
+          <ul class="m-0 list-none divide-y divide-[var(--tower-border)] border-t border-[var(--tower-border)] p-0" aria-label="Ping host results">
+            @for (result of latest.results; track result.host.id) {
+              <li>
+                <details class="group px-5 py-3">
+                  <summary class="flex cursor-pointer list-none items-center gap-3 [&::-webkit-details-marker]:hidden" [attr.aria-label]="result.host.settings.name + ': ' + labels[result.outcome]">
+                    <svg class="size-3 shrink-0 text-slate-400 transition-transform group-open:rotate-90" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 2 4 4-4 4" /></svg>
+                    <div class="min-w-0 flex-1"><span class="block break-words text-sm font-semibold">{{ result.host.settings.name }}</span><span class="block break-all text-xs text-[var(--tower-muted)]">{{ result.host.settings.username }}&#64;{{ result.host.settings.address }}:{{ result.host.settings.port }}</span></div>
+                    <span class="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs" [class.text-emerald-700]="result.outcome === 'successful'" [class.text-amber-800]="result.outcome !== 'successful' && result.outcome !== 'waiting'">{{ labels[result.outcome] }}</span>
+                  </summary>
+                  <pre class="mb-0 mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-slate-50 p-3 text-xs leading-relaxed">{{ result.diagnostics || 'Waiting for Ansible…' }}</pre>
+                </details>
+              </li>
+            }
+          </ul>
+          @if (latest.message) { <details class="border-t border-[var(--tower-border)] p-5 text-sm"><summary class="cursor-pointer">Run diagnostics</summary><pre class="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{{ latest.message }}</pre></details> }
+          <p class="m-0 border-t border-[var(--tower-border)] px-5 py-3 text-xs text-[var(--tower-muted)]">Results stay available during this application session, including when you leave this page.</p>
+        } @else {
+          <div class="px-6 py-12 text-center">
+            <h3 class="m-0 text-base font-semibold">{{ runLoaded() ? 'Ready when you are' : 'Loading latest run…' }}</h3>
+            <p class="mx-auto mb-0 mt-2 max-w-sm text-sm leading-relaxed text-[var(--tower-muted)]">Select hosts in your inventory and run Ping to see a result for each host here.</p>
+          </div>
+        }
+      </section>
+    </div>
+  }
+  <p class="mt-6 text-xs leading-relaxed text-[var(--tower-muted)]">Ansible Ping checks SSH login and remote Python execution. A successful check returns <code>pong</code>. This is not ICMP network ping.</p>
+</section>

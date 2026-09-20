@@ -1,4 +1,7 @@
-import { RouterLink } from '@angular/router';
+import { AutomationRunner } from '../automation/automation-runner.service';
+import { InventorySelection } from './inventory-selection.service';
+import { AutomationService, HostGroup, PingRun } from '../automation/automation.service';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { NgTemplateOutlet } from '@angular/common';
 import { Clipboard } from '@angular/cdk/clipboard';
 import { afterNextRender, Component, DestroyRef, ElementRef, Injector, computed, inject, OnInit, signal } from '@angular/core';
@@ -33,6 +36,134 @@ export class Hosts implements OnInit {
   private readonly destroyRef = inject(DestroyRef);
   private systemQueue: Host[] = [];
   private activeInspections = 0;
+  readonly automation = inject(AutomationService);
+  readonly pingRun = signal<PingRun | null>(null);
+  readonly pingError = signal('');
+  readonly pingLoaded = signal(false);
+  readonly expandedPing = signal<string | null>(null);
+  private pingTimer?: ReturnType<typeof setTimeout>;
+  private pingRevision = 0;
+  readonly pingStatuses = computed(() => {
+    const results = new Map(this.pingRun()?.results.map(result => [result.host.id, result]));
+    return new Map(this.hosts().map(host => {
+      const result = results.get(host.id);
+      const changed = result && JSON.stringify(result.host.settings) !== JSON.stringify(host.settings);
+      const outcome = this.pingError() ? 'unavailable' : changed ? 'changed' : result?.outcome ?? (this.pingLoaded() ? 'unchecked' : 'loading');
+      const labels: Record<string, string> = {
+        waiting: 'Waiting', successful: 'Passed', unreachable: 'Unreachable', failed: 'Failed',
+        cancelled: 'Cancelled', 'timed-out': 'Timed out', changed: 'Settings changed',
+        unchecked: 'Not checked', loading: 'Loading', unavailable: 'Status unavailable',
+      };
+      const tooltips: Record<string, string> = {
+        successful: 'Up & Running',
+        waiting: 'Checking…',
+        unreachable: 'Unreachable',
+        failed: 'Check failed',
+        'timed-out': 'Timed out',
+        cancelled: 'Cancelled',
+        changed: 'Needs recheck',
+        unchecked: 'Not checked',
+        loading: 'Loading…',
+        unavailable: 'Status unavailable',
+      };
+      const color = outcome === 'successful' ? 'bg-emerald-500 ring-emerald-500/10' :
+        ['unreachable', 'failed', 'timed-out'].includes(outcome) ? 'bg-red-500 ring-red-500/10' :
+        outcome === 'waiting' ? 'bg-blue-500 ring-blue-500/10' : 'bg-slate-400 ring-slate-400/10';
+      const detail = this.pingError() || (changed ? 'Host settings changed since this result. Run Ping again.' :
+        result ? result.diagnostics || (result.outcome === 'waiting' ? 'Waiting for Ansible to report a result.' : 'No additional diagnostics reported.') : 'No Ping result for this host in the latest run.');
+      return [host.id, { outcome, label: labels[outcome], tooltip: tooltips[outcome], color, detail }];
+    }));
+  });
+
+  async refreshPing() {
+    if (!this.service.desktop || this.destroyRef.destroyed) return;
+    clearTimeout(this.pingTimer);
+    const revision = ++this.pingRevision;
+    try {
+      const run = await this.automation.latest();
+      if (this.destroyRef.destroyed || revision !== this.pingRevision) return;
+      this.pingRun.set(run);
+      this.pingLoaded.set(true);
+      this.pingError.set('');
+    } catch (error) {
+      if (this.destroyRef.destroyed || revision !== this.pingRevision) return;
+      this.pingError.set(error instanceof Error ? error.message : String(error));
+    }
+    if (this.pingRun()?.active) this.pingTimer = setTimeout(() => void this.refreshPing(), 1000);
+  }
+  readonly selection = inject(InventorySelection);
+  readonly runner = inject(AutomationRunner);
+  private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
+  readonly groups = this.selection.groups;
+  readonly groupId = signal('');
+  readonly group = computed(() => this.groups().find(g => g.id === this.groupId()));
+  readonly overlapId = signal('');
+  readonly memberships = computed(() => {
+    const memberships = new Map<string, HostGroup[]>();
+    for (const group of this.groups()) {
+      for (const id of group.memberIds) memberships.set(id, [...(memberships.get(id) ?? []), group]);
+    }
+    return memberships;
+  });
+  readonly overlaps = computed(() => {
+    const members = new Set(this.group()?.memberIds ?? []);
+    return this.groups().filter(group => group.id !== this.groupId()).map(group => ({
+      ...group, count: group.memberIds.filter(id => members.has(id)).length,
+    })).filter(group => group.count > 0);
+  });
+  readonly overlap = computed(() => this.overlaps().find(group => group.id === this.overlapId()));
+  chooseGroup(id: string) { this.groupId.set(id); this.overlapId.set(''); }
+  groupColor(id: string) { return this.selection.groupColors().get(id); }
+  readonly groupEditing = signal(false);
+  readonly groupEditId = signal<string | null>(null);
+  readonly groupName = signal('');
+  readonly selectedHostIds = this.selection.hostIds;
+  readonly groupMembers = signal<string[]>([]);
+  readonly rowIds = computed(() => this.groupEditing() ? this.groupMembers() : this.selectedHostIds());
+  readonly selectedIds = computed(() => new Set(this.rowIds()));
+  readonly allVisibleSelected = computed(() => this.filtered().length > 0 && this.filtered().every(host => this.selectedIds().has(host.id)));
+  readonly someVisibleSelected = computed(() => this.filtered().some(host => this.selectedIds().has(host.id)));
+  readonly hiddenSelectionCount = computed(() => {
+    const visible = new Set(this.filtered().map(host => host.id));
+    return this.rowIds().filter(id => !visible.has(id)).length;
+  });
+  selectVisible(checked: boolean) {
+    if (this.busy()) return;
+    for (const host of this.filtered()) this.toggleHostSelection(host.id, checked);
+  }
+  clearRows() { if (this.groupEditing()) this.groupMembers.set([]); else this.selection.clear(); }
+  editGroup(group?: HostGroup) {
+    this.groupEditId.set(group?.id ?? null);
+    this.groupName.set(group?.name ?? '');
+    this.groupMembers.set([...(group?.memberIds ?? this.selectedHostIds())]);
+    if (group) {
+      this.chooseGroup('');
+      this.search.set('');
+    }
+    this.editing.set(false);
+    this.groupEditing.set(true);
+    afterNextRender(() => {
+      const input = this.element.nativeElement.querySelector<HTMLInputElement>('#group-name');
+      input?.focus(); input?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    }, { injector: this.injector });
+  }
+  toggleHostSelection(id: string, checked: boolean) {
+    if (this.busy()) return;
+    if (this.groupEditing()) this.groupMembers.update(ids => checked ? [...new Set([...ids, id])] : ids.filter(member => member !== id));
+    else this.selection.select([id], checked);
+  }
+  async saveGroup() {
+    if (!this.groupName().trim()) return;
+    await this.perform(async () => {
+      const group = await this.automation.save(this.groupEditId(), this.groupName().trim(), this.groupMembers());
+      this.groups.update(groups => [...groups.filter(g => g.id !== group.id), group]);
+      this.chooseGroup(group.id);
+      this.groupEditing.set(false);
+      this.status.set('Group saved.');
+      await this.router.navigateByUrl('/groups');
+    });
+  }
   readonly systemInfo = signal<Record<string, HostSystemInfo>>({});
   readonly sort = signal('name');
   readonly layout = signal<'cards' | 'list'>('list');
@@ -53,7 +184,7 @@ export class Hosts implements OnInit {
   ];
   readonly service = inject(HostsService);
   private readonly fb = inject(FormBuilder);
-  readonly hosts = signal<Host[]>([]);
+  readonly hosts = this.selection.hosts;
   readonly identities = signal<IdentityOptions>({ agentIdentities: [], keyFiles: [], agentError: null, keyError: null });
   readonly terminals = signal<Terminal[]>([]);
   readonly terminal = signal('');
@@ -67,7 +198,10 @@ export class Hosts implements OnInit {
   readonly deleting = signal<Host | null>(null);
   readonly filtered = computed(() => {
     const search = this.search().trim().toLowerCase();
-    return this.hosts().filter(({ settings: h }) => `${h.name} ${h.address} ${h.username}`.toLowerCase().includes(search)).sort((a, b) => {
+    return this.hosts().filter(h => {
+      return (!this.group() || this.group()!.memberIds.includes(h.id))
+        && (!this.overlap() || this.overlap()!.memberIds.includes(h.id));
+    }).filter(({ settings: h }) => `${h.name} ${h.address} ${h.username}`.toLowerCase().includes(search)).sort((a, b) => {
       const key = this.sort() as 'name' | 'address' | 'username';
       return a.settings[key].localeCompare(b.settings[key], undefined, { numeric: true, sensitivity: 'base' });
     });
@@ -82,7 +216,7 @@ export class Hosts implements OnInit {
   });
 
   constructor() {
-    this.destroyRef.onDestroy(() => { this.systemQueue = []; });
+    this.destroyRef.onDestroy(() => { this.systemQueue = []; clearTimeout(this.pingTimer); ++this.pingRevision; });
   }
 
   copyInfo(host: Host, label: string, value: string | number) {
@@ -136,11 +270,26 @@ export class Hosts implements OnInit {
     }
   }
 
-  ngOnInit() { if (this.service.desktop) void this.refresh(); }
+  async ngOnInit() {
+    if (!this.service.desktop) return;
+    await this.refresh();
+    const params = this.route.snapshot.queryParamMap;
+    this.groupId.set(params.get('group') ?? '');
+    this.overlapId.set(params.get('overlap') ?? '');
+    const edit = params.get('editGroup');
+    if (edit === 'new') this.editGroup();
+    else if (edit) {
+      const group = this.groups().find(group => group.id === edit);
+      if (group) this.editGroup(group); else this.error.set('This group no longer exists. Return to Groups and refresh.');
+    }
+  }
 
   async refresh() {
+    void this.refreshPing();
     await this.perform(async () => {
-      const [hosts, identities, terminals] = await Promise.all([this.service.list(), this.service.identities(), this.service.terminals()]);
+      const [hosts, identities, terminals, groups] = await Promise.all([this.service.list(), this.service.identities(), this.service.terminals(), this.automation.groups()]);
+      this.groups.set(groups);
+      if (!groups.some(g => g.id === this.groupId())) this.groupId.set('');
       this.hosts.set(hosts);
       this.identities.set(identities);
       this.terminals.set(terminals);
@@ -163,6 +312,7 @@ export class Hosts implements OnInit {
       kind: auth?.kind ?? 'agent', identity: auth?.kind === 'agent' ? auth.fingerprint : auth?.filename ?? '',
     });
     this.editing.set(true);
+    this.groupEditing.set(false);
     this.deleting.set(null);
     afterNextRender(() => {
       const input = this.element.nativeElement.querySelector<HTMLInputElement>('input[formControlName="name"]');
@@ -196,6 +346,8 @@ export class Hosts implements OnInit {
     await this.perform(async () => {
       await this.service.delete(host.id);
       this.hosts.update(hosts => hosts.filter(h => h.id !== host.id));
+      this.groups.update(groups => groups.map(g => ({ ...g, memberIds: g.memberIds.filter(id => id !== host.id) })));
+      this.selectedHostIds.update(ids => ids.filter(id => id !== host.id));
       this.systemQueue = this.systemQueue.filter(item => item.id !== host.id);
       this.systemInfo.update(info => {
         const remaining = { ...info };

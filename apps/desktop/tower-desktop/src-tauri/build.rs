@@ -1,6 +1,13 @@
 fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
+            "list_host_groups",
+            "save_host_group",
+            "delete_host_group",
+            "ansible_availability",
+            "start_ping",
+            "latest_ping",
+            "cancel_ping",
             "start_htop",
             "poll_htop",
             "input_htop",

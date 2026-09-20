@@ -1,7 +1,8 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { provideRouter, Router } from '@angular/router';
 import { Clipboard } from '@angular/cdk/clipboard';
 import { MatSnackBar } from '@angular/material/snack-bar';
+import { AutomationService, PingRun } from '../automation/automation.service';
 import { Hosts } from './hosts';
 import { Host, HostOverview, HostsService } from './hosts.service';
 
@@ -13,6 +14,7 @@ const overview: HostOverview = { collectedAt: 1, supported: true, elevated: fals
 describe('Hosts', () => {
   let component: Hosts;
   let fixture: ComponentFixture<Hosts>;
+  let automation: { latest: ReturnType<typeof vi.fn>; groups: ReturnType<typeof vi.fn>; save: ReturnType<typeof vi.fn> };
   let service: {
     desktop: boolean;
     list: ReturnType<typeof vi.fn>;
@@ -33,13 +35,54 @@ describe('Hosts', () => {
       terminals: vi.fn().mockResolvedValue([{ id: 'xterm', label: 'xterm' }]),
       save: vi.fn().mockResolvedValue(saved), delete: vi.fn().mockResolvedValue(undefined), connect: vi.fn().mockResolvedValue(undefined),
     };
+    automation = { latest: vi.fn().mockResolvedValue(null), groups: vi.fn().mockResolvedValue([]), save: vi.fn().mockImplementation(async (id, name, memberIds) => ({ id: id ?? 'group-1', name, memberIds })) };
     await TestBed.configureTestingModule({
-      imports: [Hosts], providers: [provideRouter([]), { provide: HostsService, useValue: service }],
+      imports: [Hosts], providers: [provideRouter([]), { provide: HostsService, useValue: service }, { provide: AutomationService, useValue: automation }],
     }).compileComponents();
 
+    vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
     fixture = TestBed.createComponent(Hosts);
     component = fixture.componentInstance;
     await fixture.whenStable();
+  });
+
+  it('shows latest Ping outcomes by host ID and invalidates changed settings', async () => {
+    const duplicate = { ...saved, id: 'other' };
+    component.hosts.set([saved, duplicate]);
+    for (const outcome of ['waiting', 'successful', 'unreachable', 'failed', 'cancelled', 'timed-out'] as const) {
+      automation.latest.mockResolvedValue({ id: 'run', active: false, results: [{ host: saved, outcome, diagnostics: 'Details' }] });
+      await component.refreshPing();
+      expect(component.pingStatuses().get(saved.id)?.outcome).toBe(outcome);
+      expect(component.pingStatuses().get(duplicate.id)?.outcome).toBe('unchecked');
+    }
+    component.hosts.set([{ ...saved, settings: { ...saved.settings, port: 2222 } }]);
+    expect(component.pingStatuses().get(saved.id)?.outcome).toBe('changed');
+  });
+
+  it('polls active runs, reports polling failures, and stops on destroy', async () => {
+    vi.useFakeTimers();
+    try {
+      const run = { id: 'run', active: true, results: [{ host: saved, outcome: 'waiting', diagnostics: '' }] } as PingRun;
+      automation.latest.mockResolvedValue(run);
+      await component.refreshPing();
+      automation.latest.mockRejectedValueOnce('Connection lost');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(component.pingStatuses().get(saved.id)?.outcome).toBe('unavailable');
+      automation.latest.mockResolvedValue({ ...run, active: false, results: [{ host: saved, outcome: 'successful', diagnostics: 'pong' }] });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(component.pingStatuses().get(saved.id)?.label).toBe('Passed');
+      expect(component.pingError()).toBe('');
+      let finish!: (run: PingRun) => void;
+      automation.latest.mockImplementation(() => new Promise<PingRun>(resolve => { finish = resolve; }));
+      const pending = component.refreshPing();
+      fixture.destroy();
+      finish(run);
+      await pending;
+      expect(component.pingRun()?.active).toBe(false);
+      const calls = automation.latest.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(automation.latest).toHaveBeenCalledTimes(calls);
+    } finally { vi.useRealTimers(); }
   });
 
   it('loads saved hosts and filters by name, address and username', () => {
@@ -48,6 +91,79 @@ describe('Hosts', () => {
     expect(component.filtered()).toEqual([saved]);
     component.search.set('missing');
     expect(component.filtered()).toEqual([]);
+  });
+
+  it('creates a group from row selections including hosts hidden by filters', async () => {
+    component.toggleHostSelection(saved.id, true);
+    component.search.set('missing');
+    component.editGroup();
+    component.groupName.set('Selected');
+    await component.saveGroup();
+    expect(automation.save).toHaveBeenCalledWith(null, 'Selected', [saved.id]);
+    expect(component.selectedHostIds()).toEqual([saved.id]);
+    expect(component.groupEditing()).toBe(false);
+  });
+
+  it('selects and deselects visible hosts without discarding hidden selections', () => {
+    const second = { ...saved, id: 'host-2', settings: { ...saved.settings, name: 'Staging' } };
+    component.hosts.set([saved, second]);
+    component.toggleHostSelection(saved.id, true);
+    expect(component.someVisibleSelected()).toBe(true);
+    expect(component.allVisibleSelected()).toBe(false);
+    component.search.set('Staging');
+    component.selectVisible(true);
+    expect(component.selectedHostIds()).toEqual([saved.id, second.id]);
+    component.selectVisible(false);
+    expect(component.selectedHostIds()).toEqual([saved.id]);
+    expect(component.hiddenSelectionCount()).toBe(1);
+  });
+
+  it('uses row selection to edit membership without changing saved members before save', () => {
+    const group = { id: 'group-1', name: 'Servers', memberIds: [saved.id] };
+    component.groups.set([group]);
+    component.groupId.set(group.id);
+    component.search.set('missing');
+    component.editGroup(group);
+    expect(component.groupId()).toBe('');
+    expect(component.search()).toBe('');
+    expect(component.groupMembers()).toEqual([saved.id]);
+    expect(component.selectedHostIds()).toEqual([]);
+    component.toggleHostSelection(saved.id, false);
+    expect(component.groups()[0].memberIds).toEqual([saved.id]);
+  });
+
+  it('preserves selected rows on failed save and only prunes explicitly deleted hosts', async () => {
+    component.toggleHostSelection(saved.id, true);
+    component.editGroup();
+    component.groupName.set('Servers');
+    automation.save.mockRejectedValue('Write failed');
+    await component.saveGroup();
+    expect(component.selectedHostIds()).toEqual([saved.id]);
+    expect(component.groupEditing()).toBe(true);
+    await component.remove(saved);
+    expect(component.selectedHostIds()).toEqual([]);
+    component.selectedHostIds.set(['missing']);
+    await component.refresh();
+    expect(component.selectedHostIds()).toEqual(['missing']);
+  });
+
+  it('filters group intersections without changing session selections', () => {
+    const second = { ...saved, id: 'host-2' };
+    component.hosts.set([saved, second]);
+    component.groups.set([
+      { id: 'a', name: 'A', memberIds: [saved.id, second.id] },
+      { id: 'b', name: 'B', memberIds: [saved.id] },
+    ]);
+    component.toggleHostSelection(second.id, true);
+    component.selection.selectGroup('a', true);
+    component.chooseGroup('a');
+    component.overlapId.set('b');
+    expect(component.filtered()).toEqual([saved]);
+    expect(component.selection.snapshot()).toEqual({ hostIds: [second.id], groupIds: ['a'] });
+    component.editGroup(component.groups()[1]);
+    component.toggleHostSelection(second.id, true);
+    expect(component.groupMembers()).toEqual([saved.id, second.id]);
+    expect(component.selection.snapshot()).toEqual({ hostIds: [second.id], groupIds: ['a'] });
   });
 
   it('copies the exact inventory value and reports clipboard failures honestly', () => {

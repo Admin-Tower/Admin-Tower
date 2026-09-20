@@ -21,6 +21,8 @@ test('host detail reviews actions, refreshes results and keeps firewall read-onl
         calls.push({ command, args }); sessionStorage.setItem('calls', JSON.stringify(calls));
         switch (command) {
           case 'list_hosts': return [host];
+          case 'list_host_groups': return [];
+          case 'latest_ping': return null;
           case 'list_identities': return { agentIdentities: [], keyFiles: ['id_ed25519'], agentError: null, keyError: null };
           case 'list_terminals': return [{ id: 'xterm', label: 'xterm' }];
           case 'inspect_host': return snapshot;

@@ -1,0 +1,26 @@
+<section class="mx-auto max-w-6xl" aria-labelledby="groups-heading">
+  <header class="mb-6 flex flex-wrap items-center justify-between gap-4">
+    <div><h1 id="groups-heading" class="m-0 text-3xl font-semibold">Groups</h1><p class="mb-0 text-sm text-[var(--tower-muted)]">Organize hosts and select groups for automation. Shared hosts run only once.</p></div>
+    @if (inventory.desktop) { <div class="flex gap-2"><button matButton (click)="refresh()" [disabled]="busy()">Refresh</button><a matButton="filled" routerLink="/hosts" [queryParams]="{editGroup: 'new'}">New group</a></div> }
+  </header>
+  @if (!inventory.desktop) { <p>Open Admin-Tower for Linux to manage saved groups.</p> } @else {
+    @if (error()) { <p role="alert" class="text-red-700">{{ error() }}</p> }
+    @if (runner.error()) { <p role="alert" class="text-red-700">{{ runner.error() }}</p> }
+    <div class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--tower-border)] bg-white p-4" aria-label="Session selection">
+      <span>{{ selection.hasSelection() ? selection.summary() + ' selected · ' + selection.selectedHosts().length + (selection.selectedHosts().length === 1 ? ' unique host' : ' unique hosts') : 'Select groups here and individual hosts in Hosts.' }}</span>
+      <div class="flex flex-wrap gap-2"><button matButton="filled" (click)="runner.runPing()" [disabled]="!runner.canRun()">▶ {{ runner.pending() ? 'Starting…' : 'Run Ping' }}</button><a matButton routerLink="/automation">Automation</a>@if (selection.hasSelection()) { <button matButton (click)="selection.clear()" [disabled]="runner.pending()">Clear selection</button> }</div>
+    </div>
+    <label class="mb-5 block text-sm">Search groups<input type="search" class="mt-2 block w-full rounded-lg border border-[var(--tower-border)] bg-white p-3" [value]="search()" (input)="search.set($any($event.target).value)"></label>
+    <ul class="m-0 grid list-none gap-4 p-0 sm:grid-cols-2 xl:grid-cols-3" aria-label="Saved groups">
+      @for (group of cards(); track group.id) {
+        <li class="min-w-0 rounded-xl border border-[var(--tower-border)] border-l-4 bg-white p-5" [style.border-left-color]="selection.groupColors().get(group.id)" [class.ring-2]="selection.groupIds().includes(group.id)" [class.ring-blue-500]="selection.groupIds().includes(group.id)">
+          <label class="flex cursor-pointer items-start justify-between gap-3"><span class="break-all text-lg font-semibold">{{ group.name }}</span><input type="checkbox" class="mt-1 size-5 shrink-0 accent-blue-600" [attr.aria-label]="'Select group ' + group.name" [checked]="selection.groupIds().includes(group.id)" (change)="selection.selectGroup(group.id, $any($event.target).checked)" [disabled]="!group.memberIds.length || busy()"></label>
+          <p class="text-sm text-[var(--tower-muted)]">{{ group.memberIds.length }} hosts · {{ group.shared }} shared</p>
+          @if (group.overlaps.length) { <div class="mb-3 flex flex-wrap gap-2 text-xs"><span>Shared with</span>@for (other of group.overlaps; track other.id) { <a class="rounded-full bg-blue-50 px-2 py-1" routerLink="/hosts" [queryParams]="{group: group.id, overlap: other.id}">{{ other.name }} · {{ other.count }}</a> }</div> }
+          <div class="flex flex-wrap gap-1"><a matButton routerLink="/hosts" [queryParams]="{group: group.id}">View hosts</a><a matButton routerLink="/hosts" [queryParams]="{editGroup: group.id}" [attr.aria-label]="'Edit group ' + group.name">Edit</a><button matButton (click)="deleting.set(group)" [disabled]="busy()" [attr.aria-label]="'Delete group ' + group.name">Delete</button></div>
+        </li>
+      } @empty { <li class="rounded-xl border border-[var(--tower-border)] bg-white p-6 text-sm text-[var(--tower-muted)]">{{ busy() ? 'Loading groups…' : 'No groups found. Create a group from selected host rows.' }}</li> }
+    </ul>
+    @if (deleting(); as group) { <div role="alert" class="mt-4 rounded-xl border border-[var(--tower-border)] bg-white p-4">Delete {{ group.name }}? Its hosts will be kept.<button matButton (click)="remove()" [disabled]="busy()">Confirm delete group</button><button matButton (click)="deleting.set(null)" [disabled]="busy()">Keep group</button></div> }
+  }
+</section>

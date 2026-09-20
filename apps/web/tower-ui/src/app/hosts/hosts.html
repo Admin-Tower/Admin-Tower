@@ -64,27 +64,83 @@
       </form>
     }
     @if (loaded()) {
+      @if (group(); as selected) { <div class="mb-3 flex flex-wrap items-center gap-2 text-sm"><a routerLink="/groups">Groups</a><span aria-hidden="true">/</span><strong>{{ selected.name }}</strong><button matButton (click)="chooseGroup('')">Show all hosts</button></div> }
       <div class="filters">
         <mat-form-field appearance="outline" floatLabel="always" subscriptSizing="dynamic"><mat-label>Search hosts</mat-label><input matInput type="search" placeholder="Name, address or SSH user" [value]="search()" (input)="search.set($any($event.target).value)"></mat-form-field>
         <mat-form-field appearance="outline" floatLabel="always" subscriptSizing="dynamic"><mat-label>Terminal</mat-label><mat-select [value]="terminal()" (selectionChange)="terminal.set($event.value)" [disabled]="busy()">
           @for (item of terminals(); track item.id) { <mat-option [value]="item.id">{{ item.label }}</mat-option> }
         </mat-select></mat-form-field>
       </div>
+      @if (groupEditing()) {
+        <form class="editor" (submit)="$event.preventDefault(); saveGroup()" aria-label="Group editor">
+          <h2>{{ groupEditId() ? 'Edit group' : 'New group' }}</h2>
+          <fieldset [disabled]="busy()">
+            <mat-form-field appearance="outline" subscriptSizing="dynamic"><mat-label>Group name</mat-label><input id="group-name" matInput required maxlength="120" [value]="groupName()" (input)="groupName.set($any($event.target).value)"></mat-form-field>
+            <p class="hint">{{ rowIds().length }} {{ rowIds().length === 1 ? 'host' : 'hosts' }} selected. Use the host rows below to change group membership.</p>
+            <button matButton="filled" type="submit" [disabled]="!groupName().trim() || busy()">Save group</button>
+            <button matButton type="button" (click)="groupEditing.set(false)" [disabled]="busy()">Cancel group edit</button>
+          </fieldset>
+        </form>
+      }
+      @if (overlap(); as shared) {
+        <p role="status" class="text-sm text-[var(--tower-muted)]">Showing hosts in both <strong>{{ group()?.name }}</strong> and <strong>{{ shared.name }}</strong>.<button matButton (click)="overlapId.set('')">Clear overlap</button></p>
+      }
       <div class="inventory-summary"><span>{{ filtered().length }} of {{ hosts().length }} hosts</span><label>Sort by <select [value]="sort()" (change)="sort.set($any($event.target).value)"><option value="name">Name</option><option value="address">Address</option><option value="username">SSH user</option></select></label>@if (search()) { <button matButton (click)="search.set('')">Clear search</button> }</div>
       @if (!terminals().length) { <p class="hint">Install GNOME Terminal, Konsole, or xterm to open SSH connections.</p> }
       @if (!hosts().length) { <div class="notice"><h2>No hosts yet</h2><p>Add a host and choose its SSH identity to get started.</p></div> }
-      @else if (!filtered().length) { <div class="notice"><h2>No matching hosts</h2><p>Try a different name, address or SSH user.</p><button matButton (click)="search.set('')">Show all hosts</button></div> }
+      @else if (!filtered().length) { <div class="notice"><h2>No matching hosts</h2><p>Try a different search or group filter.</p><button matButton (click)="search.set(''); chooseGroup('')">Show all hosts</button></div> }
+      @if (runner.error()) { <p role="alert" class="error">{{ runner.error() }}</p> }
+      @if (selection.groupIds().length && !groupEditing()) { <p class="text-sm text-[var(--tower-muted)]">{{ selection.groupIds().length }} groups also selected · {{ selection.selectedHosts().length }} unique hosts in total. <a routerLink="/groups">Manage selected groups</a></p> }
+      <div class="sticky top-0 z-20 my-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-xl border border-[var(--tower-border)] bg-[var(--mat-sys-surface)] px-3 py-2">
+        <div class="flex flex-wrap items-center gap-3 text-xs text-[var(--tower-muted)]">
+          <label class="flex items-center gap-2 cursor-pointer"><input type="checkbox" class="size-4 accent-blue-600" aria-label="Select visible hosts" [checked]="allVisibleSelected()" [indeterminate]="someVisibleSelected() && !allVisibleSelected()" [disabled]="busy() || !filtered().length" (change)="selectVisible($any($event.target).checked)">Select visible</label>
+          @if (rowIds().length || (!groupEditing() && selection.hasSelection())) {
+            <span role="status" aria-live="polite">{{ rowIds().length }} hosts selected@if (hiddenSelectionCount()) { · {{ hiddenSelectionCount() }} hidden by filters }</span>
+            @if (!groupEditing()) {
+              <button matButton="filled" (click)="runner.runPing()" [disabled]="!runner.canRun()">▶ {{ runner.pending() ? 'Starting…' : 'Run Ping' }}</button>
+              <a matButton routerLink="/automation">Automation</a>
+              @if (selectedHostIds().length) { <button matButton (click)="editGroup()" [disabled]="busy()">Save as group</button> }
+            }
+            <button matButton (click)="clearRows()" [disabled]="busy()">Clear selection</button>
+          }
+        </div>
       <div class="view-switch" role="group" aria-label="Host view">
         <button matButton [attr.aria-pressed]="layout() === 'cards'" (click)="layout.set('cards')"><ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z'}" />Cards</button>
         <button matButton [attr.aria-pressed]="layout() === 'list'" (click)="layout.set('list')"><ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M8 6h13 M8 12h13 M8 18h13 M3 6h.01 M3 12h.01 M3 18h.01'}" />List</button>
       </div>
+      </div>
       <ul class="host-list" [class.card-view]="layout() === 'cards'" aria-label="Saved hosts">
         @for (host of filtered(); track host.id) {
-          <li>
-            <div class="host-avatar"><ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M4 3h16v7H4z M4 14h16v7H4z M7 6.5h.01 M7 17.5h.01 M11 6.5h6 M11 17.5h6'}" /></div>
+          <li [class.ring-2]="selectedIds().has(host.id)" [class.ring-blue-200]="selectedIds().has(host.id)">
+            <label class="flex cursor-pointer items-center gap-2">
+              <input type="checkbox" class="size-4 shrink-0 cursor-pointer accent-blue-600" [attr.aria-label]="'Select ' + host.settings.name + ' (' + host.settings.address + ':' + host.settings.port + ')'" [checked]="selectedIds().has(host.id)" [disabled]="busy()" (change)="toggleHostSelection(host.id, $any($event.target).checked)">
+              <span class="host-avatar"><ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M4 3h16v7H4z M4 14h16v7H4z M7 6.5h.01 M7 17.5h.01 M11 6.5h6 M11 17.5h6'}" /></span>
+            </label>
             <div class="host-details">
-              <div class="host-identity"><div class="host-title"><h2><a [routerLink]="['/hosts', host.id]">{{ host.settings.name }}</a></h2><span class="protocol">SSH</span></div>
+              <div class="host-identity"><div class="host-title !items-center !gap-2">
+                @if (pingStatuses().get(host.id); as ping) {
+                  <button type="button" class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full hover:bg-[var(--mat-sys-surface-container)] focus-visible:outline-2 focus-visible:outline-blue-600" [attr.data-ping-status]="ping.outcome" [matTooltip]="ping.tooltip" [attr.aria-label]="'Ping for ' + host.settings.name + ': ' + ping.label" [attr.aria-expanded]="expandedPing() === host.id" [attr.aria-controls]="'ping-details-' + host.id" (click)="expandedPing.set(expandedPing() === host.id ? null : host.id)">
+                    <span class="size-2.5 rounded-full ring-4 {{ ping.color }}" [class.motion-safe:animate-pulse]="ping.outcome === 'waiting'" aria-hidden="true"></span>
+                  </button>
+                }
+                <h2><a [routerLink]="['/hosts', host.id]">{{ host.settings.name }}</a></h2><span class="protocol">SSH</span></div>
+                @if (pingStatuses().get(host.id); as ping) {
+                  <div [id]="'ping-details-' + host.id" [hidden]="expandedPing() !== host.id" class="my-2 max-w-full break-words text-xs text-[var(--tower-muted)]">
+                    <p class="!m-0">Ping · {{ ping.label }} — latest SSH and Python check</p>
+                    <p class="!my-1 whitespace-pre-wrap break-all">{{ ping.detail }}</p>
+                    @if (pingError()) { <button type="button" class="underline" (click)="refreshPing()">Retry status</button> }
+                    @if (pingRun()) { <a routerLink="/automation/ping" class="underline">View Ping run</a> }
+                  </div>
+                }
                 <p class="endpoint"><ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'SSH user', value: host.settings.username}" />&#64;<ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Address', value: host.settings.address}" /></p>
+              @if (!groupEditing() && selection.groupHostIds().has(host.id)) { <p class="!m-0 text-xs text-blue-700">Included via selected group</p> }
+              <div class="mt-1 flex flex-wrap gap-1" role="group" [attr.aria-label]="'Groups for ' + host.settings.name">
+                @for (membership of memberships().get(host.id) ?? []; track membership.id) {
+                  <button type="button" class="max-w-full cursor-pointer rounded-full border border-[var(--tower-border)] px-2 py-0.5 text-xs hover:bg-[var(--mat-sys-surface-container)] focus-visible:outline-2 focus-visible:outline-blue-600" [attr.aria-label]="'View group ' + membership.name" [routerLink]="'/groups'"><span class="mr-1 inline-block size-1.5 rounded-full" [style.background-color]="groupColor(membership.id)" aria-hidden="true"></span><span class="break-words">{{ membership.name }}</span></button>
+                } @empty {
+                  <span class="text-xs text-[var(--tower-muted)]">Ungrouped</span>
+                }
+              </div>
               </div>
               <div class="host-summary">
               @if (host.settings.port !== 22) { <p class="host-port">Port <ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Port', value: host.settings.port}" /></p> }
