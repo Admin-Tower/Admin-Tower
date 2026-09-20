@@ -1,3 +1,7 @@
+<ng-template #icon let-path><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path [attr.d]="path" /></svg></ng-template>
+<ng-template #copyValue let-host="host" let-label="label" let-value="value">
+  <button type="button" class="copy-value" (click)="copyInfo(host, label, value)" [matTooltip]="'Copy ' + label.toLowerCase()" [attr.aria-label]="'Copy ' + label.toLowerCase() + ' for ' + host.settings.name">{{ value }}</button>
+</ng-template>
 <section aria-labelledby="hosts-heading" [attr.aria-busy]="busy()">
   <header class="page-header">
     <div><h1 id="hosts-heading">Hosts</h1><p>Manage your infrastructure from one workspace.</p></div>
@@ -70,18 +74,61 @@
       @if (!terminals().length) { <p class="hint">Install GNOME Terminal, Konsole, or xterm to open SSH connections.</p> }
       @if (!hosts().length) { <div class="notice"><h2>No hosts yet</h2><p>Add a host and choose its SSH identity to get started.</p></div> }
       @else if (!filtered().length) { <div class="notice"><h2>No matching hosts</h2><p>Try a different name, address or SSH user.</p><button matButton (click)="search.set('')">Show all hosts</button></div> }
-      <ul class="host-list" aria-label="Saved hosts">
+      <div class="view-switch" role="group" aria-label="Host view">
+        <button matButton [attr.aria-pressed]="layout() === 'cards'" (click)="layout.set('cards')"><ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z'}" />Cards</button>
+        <button matButton [attr.aria-pressed]="layout() === 'list'" (click)="layout.set('list')"><ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M8 6h13 M8 12h13 M8 18h13 M3 6h.01 M3 12h.01 M3 18h.01'}" />List</button>
+      </div>
+      <ul class="host-list" [class.card-view]="layout() === 'cards'" aria-label="Saved hosts">
         @for (host of filtered(); track host.id) {
           <li>
-            <div class="host-details"><h2><a [routerLink]="['/hosts', host.id]">{{ host.settings.name }}</a></h2><p>{{ host.settings.username }}&#64;{{ host.settings.address }} · Port {{ host.settings.port }}</p>
-              <p class="identity">{{ host.settings.authentication.kind === 'agent' ? 'Agent · ' + $any(host.settings.authentication).fingerprint : 'Key · ~/.ssh/' + $any(host.settings.authentication).filename }}</p>
+            <div class="host-avatar"><ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M4 3h16v7H4z M4 14h16v7H4z M7 6.5h.01 M7 17.5h.01 M11 6.5h6 M11 17.5h6'}" /></div>
+            <div class="host-details">
+              <div class="host-identity"><div class="host-title"><h2><a [routerLink]="['/hosts', host.id]">{{ host.settings.name }}</a></h2><span class="protocol">SSH</span></div>
+                <p class="endpoint"><ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'SSH user', value: host.settings.username}" />&#64;<ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Address', value: host.settings.address}" /></p>
+              </div>
+              <div class="host-summary">
+              @if (host.settings.port !== 22) { <p class="host-port">Port <ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Port', value: host.settings.port}" /></p> }
+              @if (systemInfo()[host.id]; as system) {
+                <p class="os-summary" [attr.aria-busy]="system.pending" [matTooltip]="system.error">
+                  <ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M4 4h16v12H4z M8 20h8 M12 16v4'}" />
+                  <span class="sr-only">Operating system: </span>@if (system.name && !system.pending) { <ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Operating system', value: system.name}" /> } @else { {{ system.pending ? 'Detecting OS…' : 'OS unavailable' }} }
+                </p>
+              }
+              <div class="quick-info">
+                <button type="button" class="info-toggle" matTooltip="Quick info" (click)="toggleInfo(host.id)" [attr.aria-expanded]="expandedInfo().has(host.id)" [attr.aria-controls]="'quick-info-' + host.id" [attr.aria-label]="'Quick info for ' + host.settings.name"><ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M12 8h.01 M12 11v6 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0'}" /></button>
+                <dl [id]="'quick-info-' + host.id" [hidden]="!expandedInfo().has(host.id)">
+                  @if (systemInfo()[host.id]; as system) {
+                    <dt>Operating system</dt><dd>@if (system.name && !system.pending) { <ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Operating system', value: system.name}" /> } @else { {{ system.pending ? 'Detecting…' : 'Unavailable' }} }</dd>
+                    @if (system.kernel) { <dt>Kernel</dt><dd><ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Kernel', value: system.kernel}" /></dd> }
+                    @if (system.error) { <dt>Inspection</dt><dd>{{ system.error }} Use Refresh to retry.</dd> }
+                  }
+                  <dt>Address</dt><dd><ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Address', value: host.settings.address}" /></dd>
+                  <dt>SSH user</dt><dd><ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'SSH user', value: host.settings.username}" /></dd>
+                  @if (host.settings.port !== 22) { <dt>Port</dt><dd><ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Port', value: host.settings.port}" /></dd> }
+                  <dt>{{ host.settings.authentication.kind === 'agent' ? 'Fingerprint' : 'Identity' }}</dt>
+                  <dd><ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Identity', value: host.settings.authentication.kind === 'agent' ? $any(host.settings.authentication).fingerprint : '~/.ssh/' + $any(host.settings.authentication).filename}" /></dd>
+                </dl>
+              </div>
+              </div>
             </div>
-            <div class="actions">
-              <a matButton [routerLink]="['/hosts', host.id]" [queryParams]="{tab: 'services'}" [attr.aria-label]="'Services for ' + host.settings.name">Services</a>
-              <a matButton [routerLink]="['/hosts', host.id]" [queryParams]="{tab: 'processes'}" [attr.aria-label]="'Processes for ' + host.settings.name">Processes</a>
-              <button matButton="tonal" (click)="connect(host)" [disabled]="busy() || !terminal()" [attr.aria-label]="'Open terminal for ' + host.settings.name">Open terminal</button>
-              <button matButton (click)="edit(host)" [disabled]="busy()" [attr.aria-label]="'Edit ' + host.settings.name">Edit</button>
-              <button matButton (click)="deleting.set(host)" [disabled]="busy()" [attr.aria-label]="'Delete ' + host.settings.name">Delete</button>
+            <div class="host-actions" role="group" [attr.aria-label]="'Actions for ' + host.settings.name">
+              <span matTooltip="Open terminal">
+                <button mat-icon-button class="connect-action" (click)="connect(host)" [disabled]="busy() || !terminal()" [attr.aria-label]="'Open terminal for ' + host.settings.name">
+                  <ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M4 5l6 7-6 7 M13 19h7'}" />
+                </button>
+              </span>
+              @for (shortcut of shortcuts; track shortcut.tab) {
+                <a mat-icon-button [routerLink]="['/hosts', host.id]" [queryParams]="{tab: shortcut.tab}" [matTooltip]="shortcut.label" [attr.aria-label]="shortcut.label + ' for ' + host.settings.name">
+                  <ng-container *ngTemplateOutlet="icon; context: {$implicit: shortcut.path}" />
+                </a>
+              }
+              <span class="action-divider" aria-hidden="true"></span>
+              <button mat-icon-button (click)="edit(host)" [disabled]="busy()" matTooltip="Edit host" [attr.aria-label]="'Edit ' + host.settings.name">
+                <ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M16 3l5 5 M3 21l5-1L21 7a2 2 0 0 0-4-4L4 16z'}" />
+              </button>
+              <button mat-icon-button (click)="deleting.set(host)" [disabled]="busy()" matTooltip="Remove from inventory" [attr.aria-label]="'Delete ' + host.settings.name">
+                <ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7'}" />
+              </button>
             </div>
             @if (deleting()?.id === host.id) {
               <div class="delete-confirm" role="group" [attr.aria-label]="'Confirm deletion of ' + host.settings.name">
