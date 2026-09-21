@@ -13,6 +13,8 @@ mod packages;
 #[cfg(target_os = "linux")]
 mod reboots;
 #[cfg(target_os = "linux")]
+mod ansible;
+#[cfg(target_os = "linux")]
 mod ssh;
 
 /// Return before initializing the webview when launched by a terminal adapter.

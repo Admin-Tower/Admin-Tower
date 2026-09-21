@@ -248,3 +248,80 @@ fn terminal_input_disables_echo_and_restores_original_state() {
     drop(guard);
     assert_eq!(flags(), original);
 }
+
+#[test]
+fn hostname_validation_and_ansible_only_dispatch() {
+    for hostname in [
+        "",
+        "-option",
+        "a..b",
+        "a;id",
+        "$(id)",
+        "a b",
+        "a\nb",
+        "a_",
+        "a.",
+        "UPPER",
+        &"a".repeat(65),
+    ] {
+        assert!(action_details(&Action::SetHostname {
+            hostname: hostname.into()
+        })
+        .is_err());
+    }
+    let action = Action::SetHostname {
+        hostname: "web-01.example.com".into(),
+    };
+    assert!(action_details(&action)
+        .unwrap()
+        .1
+        .contains("ansible.builtin.hostname"));
+    assert!(remote_command(&action).unwrap_err().contains("Ansible"));
+}
+
+#[test]
+fn hostname_preflight_dispatch_and_verification() {
+    let (_dir, _store, host) = fixture();
+    let mut dispatched = false;
+    let mut calls = Vec::new();
+    let overview = execute_hostname(&host, "web-01", &mut dispatched, &mut |module, args| {
+        calls.push((module.to_owned(), args));
+        Ok(match module {
+            "ansible.builtin.setup" => {
+                serde_json::json!({"ansible_facts": {"ansible_distribution": "Ubuntu"}})
+            }
+            "ansible.builtin.hostname" => serde_json::json!({"changed": true}),
+            "ansible.builtin.command" => serde_json::json!({"stdout": "web-01\n"}),
+            _ => panic!("unexpected module"),
+        })
+    })
+    .unwrap();
+    assert!(dispatched);
+    assert_eq!(calls.len(), 3);
+    assert_eq!(
+        calls[1].1,
+        serde_json::json!({"name": "web-01", "use": "systemd"})
+    );
+    assert_eq!(overview.sections[0].output, "Hostname: web-01");
+    let mut dispatched = false;
+    assert!(
+        execute_hostname(&host, "web-01", &mut dispatched, &mut |module, _| {
+            assert_eq!(module, "ansible.builtin.setup");
+            Ok(serde_json::json!({"ansible_facts": {"ansible_distribution": "Other"}}))
+        })
+        .is_err()
+    );
+    assert!(!dispatched);
+    assert!(
+        execute_hostname(&host, "web-01", &mut dispatched, &mut |module, _| {
+            Ok(if module == "ansible.builtin.setup" {
+                serde_json::json!({"ansible_facts": {"ansible_distribution": "Ubuntu"}})
+            } else {
+                serde_json::json!({"stdout": "old-name"})
+            })
+        })
+        .unwrap_err()
+        .contains("verified")
+    );
+    assert!(dispatched);
+}

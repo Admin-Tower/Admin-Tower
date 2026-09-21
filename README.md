@@ -129,7 +129,9 @@ A preparation failure affects only that host; valid members continue.
 
 Quick Ping on a host row runs independently of other hosts and bulk Ping. Only
 that host's button is disabled while its check runs; results update in place and
-preserve other hosts' statuses. Quick jobs remain active across navigation and
+preserve other hosts' statuses. Renaming the inventory entry or remote hostname
+does not invalidate Ping; only changes to the SSH address, port, username or selected
+identity require a new check. Quick jobs remain active across navigation and
 are cancelled when the desktop shuts down.
 
 Inventory hostname/OS/kernel information uses a dedicated, read-only SSH query instead of
@@ -139,6 +141,15 @@ session. Queries are deduplicated by saved connection and run up to four at a ti
 While the inventory is visible, failed queries retry every 15 seconds and known
 metadata refreshes after 60 seconds. Successful Ping and reboot results trigger
 an OS refresh too. Changed connection settings invalidate cached metadata.
+
+Use the pencil beside **Hostname** on an inventory row to edit the remote system
+hostname. **Save hostname** runs `ansible.builtin.hostname` and verifies the result
+through Ansible before updating the displayed value. This currently supports Ubuntu,
+requires root or passwordless sudo, and shows progress plus expandable live logs
+without leaving the inventory. DNS, `/etc/hosts`, cloud-init configuration, the saved
+inventory name and SSH destination remain separate. Cloud provisioning may override
+the hostname on a later boot. Failed or unconfirmed changes are never retried
+automatically; refresh the host before submitting another change.
 
 On desktop startup, Admin-Tower automatically runs Ping once against all saved hosts.
 The check runs in the background without changing your selection or opening another

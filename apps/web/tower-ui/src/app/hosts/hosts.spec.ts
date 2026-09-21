@@ -29,12 +29,13 @@ describe('Hosts', () => {
     delete: ReturnType<typeof vi.fn>;
     connect: ReturnType<typeof vi.fn>;
     inspect: ReturnType<typeof vi.fn>;
+    review: ReturnType<typeof vi.fn>; start: ReturnType<typeof vi.fn>; operation: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
     service = {
       systemInfo: signal<Record<string, HostSystemInfo>>({}),
-      system: vi.fn(),
+      system: vi.fn(), review: vi.fn(), start: vi.fn(), operation: vi.fn(),
       desktop: true,
       inspect: vi.fn().mockResolvedValue(overview),
       list: vi.fn().mockResolvedValue([saved]),
@@ -53,6 +54,81 @@ describe('Hosts', () => {
     fixture = TestBed.createComponent(Hosts);
     component = fixture.componentInstance;
     await fixture.whenStable();
+  });
+
+  it('edits the remote hostname inline and displays only the verified result', async () => {
+    const other = { ...saved, id: 'other' };
+    component.hosts.set([saved, other]);
+    const results = [saved, other].map(host => ({ host, outcome: 'successful' as const, diagnostics: 'OK' }));
+    component.selection.pingResults.set(new Map(results.map(result => [result.host.id, result])));
+    const before = component.pingStatuses();
+    service.review.mockResolvedValue({ id: 'rename', host: saved });
+    service.start.mockResolvedValue({ id: 'rename', hostId: saved.id, state: 'succeeded', logs: 'Ansible OK', overview: {
+      ...overview, sections: [{ id: 'system', status: 'ok', truncated: false, output: 'Hostname: web-01' }],
+    } });
+    fixture.detectChanges();
+    fixture.nativeElement.querySelector('[aria-label="Change hostname for Production"]').click();
+    await fixture.whenStable(); fixture.detectChanges();
+    const input = fixture.nativeElement.querySelector('#hostname-host-1') as HTMLInputElement;
+    expect(input.value).toBe('ubuntu-server');
+    input.value = 'web-01'; input.dispatchEvent(new Event('input'));
+    await component.saveHostname(saved); fixture.detectChanges();
+    expect(service.review).toHaveBeenCalledExactlyOnceWith(saved.id, { kind: 'setHostname', hostname: 'web-01' });
+    expect(service.start).toHaveBeenCalledTimes(1);
+    expect(component.systemInfo()[saved.id].hostname).toBe('web-01');
+    expect(component.pingStatuses()).toEqual(before);
+    expect(component.selection.pingResults().get(saved.id)).toBe(results[0]);
+    expect(component.selection.pingResults().get(other.id)).toBe(results[1]);
+    expect(component.hosts()[0].settings).toEqual(saved.settings);
+    expect(component.hostnameEdits()[saved.id].editing).toBe(false);
+    expect(fixture.nativeElement.textContent).toContain('Hostname changed to web-01.');
+    expect(TestBed.inject(Router).navigateByUrl).not.toHaveBeenCalled();
+  });
+
+  it('preserves Ping after saving a display name but invalidates changed SSH connections', async () => {
+    component.selection.pingResults.set(new Map([[saved.id, { host: saved, outcome: 'successful', diagnostics: 'OK' }]]));
+    const renamed = { ...saved, settings: { ...saved.settings, name: 'Renamed server' } };
+    service.save.mockResolvedValue(renamed);
+    component.edit(saved);
+    component.form.controls.name.setValue(renamed.settings.name);
+    await component.save();
+    expect(component.pingStatuses().get(saved.id)?.outcome).toBe('successful');
+    for (const patch of [
+      { address: '192.0.2.99' }, { port: 2222 }, { username: 'different' },
+      { authentication: { kind: 'keyFile' as const, filename: 'another_key' } },
+      { authentication: { kind: 'agent' as const, fingerprint: 'SHA256:another' } },
+    ]) {
+      component.hosts.set([{ ...renamed, settings: { ...renamed.settings, ...patch } }]);
+      expect(component.pingStatuses().get(saved.id)?.outcome).toBe('changed');
+    }
+  });
+
+  it('rejects invalid hostnames and cancellation without submitting an operation', async () => {
+    component.editHostname(saved);
+    component.hostnameValue(saved.id, 'bad;hostname');
+    await component.saveHostname(saved);
+    expect(component.hostnameEdits()[saved.id].error).toContain('lowercase');
+    component.cancelHostname(saved.id);
+    await component.saveHostname(saved);
+    expect(service.review).not.toHaveBeenCalled();
+  });
+
+  it('polls without duplicate dispatch and preserves the hostname on an uncertain result', async () => {
+    vi.useFakeTimers();
+    try {
+      service.review.mockResolvedValue({ id: 'rename', host: saved });
+      service.start.mockResolvedValue({ id: 'rename', hostId: saved.id, state: 'running' });
+      service.operation.mockResolvedValue({ id: 'rename', hostId: saved.id, state: 'unknown', message: 'Refresh before retrying', logs: 'Connection lost' });
+      component.editHostname(saved); component.hostnameValue(saved.id, 'web-01');
+      const pending = component.saveHostname(saved);
+      await component.saveHostname(saved);
+      await vi.advanceTimersByTimeAsync(1000); await pending;
+      expect(service.start).toHaveBeenCalledTimes(1);
+      expect(component.systemInfo()[saved.id].hostname).toBe('ubuntu-server');
+      expect(component.hostnameEdits()[saved.id].error).toContain('Refresh before retrying');
+      expect(component.hostnameEdits()[saved.id].logs).toBe('Connection lost');
+      expect(component.busy()).toBe(false);
+    } finally { vi.useRealTimers(); }
   });
 
   it('keeps row actions inline and reboots exactly the clicked host after preflight', async () => {

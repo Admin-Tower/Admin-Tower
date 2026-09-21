@@ -23,6 +23,7 @@ export interface HtopFrame { data: string; ended: boolean; message: string }
 export interface Terminal { id: string; label: string }
 
 export type HostAction =
+  | { kind: 'setHostname'; hostname: string }
   | { kind: 'createUser'; username: string }
   | { kind: 'createGroup'; group: string }
   | { kind: 'membership'; username: string; group: string; add: boolean }
@@ -31,7 +32,7 @@ export type HostAction =
 export interface HostSection { id: string; status: string; output: string; truncated: boolean }
 export interface HostOverview { target?: Host | null; collectedAt: number; elevated: boolean; supported: boolean; sections: HostSection[] }
 export interface ActionReview { id: string; host: Host; summary: string; command: string; warning: string; expiresAt: number }
-export interface HostOperation { id: string; hostId: string; state: string; message: string; overview: HostOverview | null }
+export interface HostOperation { id: string; hostId: string; state: string; message: string; overview: HostOverview | null; logs?: string }
 
 export interface HostSystemInfo {
   name: string; hostname: string; kernel: string; pending: boolean; error: string;

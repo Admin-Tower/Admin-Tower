@@ -31,6 +31,9 @@ const CHECK_OS: &str = "distro=$(sed -n 's/^ID=//p' /etc/os-release | tr -d '\"'
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Action {
+    SetHostname {
+        hostname: String,
+    },
     CreateUser {
         username: String,
     },
@@ -122,6 +125,8 @@ pub struct Job {
     pub state: String,
     pub message: String,
     pub overview: Option<Overview>,
+    #[serde(default)]
+    pub logs: String,
 }
 
 fn now() -> u64 {
@@ -168,6 +173,19 @@ fn quote(value: &str) -> String {
 
 fn action_details(action: &Action) -> Result<(String, String, String)> {
     Ok(match action {
+        Action::SetHostname { hostname } => {
+            if hostname.is_empty() || hostname.len() > 64 || !hostname.split('.').all(|label| {
+                !label.is_empty() && label.len() <= 63
+                    && label.as_bytes()[0].is_ascii_alphanumeric()
+                    && label.as_bytes()[label.len() - 1].is_ascii_alphanumeric()
+                    && label.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            }) {
+                return Err("Use a hostname of up to 64 lowercase letters, digits, hyphens or dots, with each label starting and ending with a letter or digit.".into());
+            }
+            (format!("Set hostname to {hostname}"),
+             format!("ansible.builtin.hostname {}", serde_json::json!({"name": hostname, "use": "systemd"})),
+             "Changes the remote system hostname now and across reboots. DNS, /etc/hosts, cloud-init configuration and the inventory connection address are not changed.".into())
+        }
         Action::CreateUser { username } => {
             name(username)?;
             (format!("Create user {username}"), format!("/usr/sbin/useradd -m -U -s /bin/bash -- {}", quote(username)),
@@ -196,6 +214,9 @@ fn action_details(action: &Action) -> Result<(String, String, String)> {
 }
 
 fn remote_script(action: &Action) -> Result<String> {
+    if matches!(action, Action::SetHostname { .. }) {
+        return Err("Hostname changes must run through Ansible.".into());
+    }
     let (_, command, _) = action_details(action)?;
     let mut script = PREFIX.to_owned();
     if !matches!(action, Action::Inspect { .. }) {
@@ -597,6 +618,9 @@ fn claim(path: &Path) -> Result<()> {
 pub fn start(store: &Store, environment: &Environment, id: &str, terminal: &str) -> Result<Job> {
     let request = request(store, id)?;
     ensure_current(store, &request)?;
+    if matches!(request.action, Action::SetHostname { .. }) {
+        return start_hostname(store, environment, request);
+    }
     let _checked = ssh::prepare(&request.host, environment, &store.directory)?;
     let directory = jobs_dir(store)?;
     claim(&directory.join(format!("{id}.started")))?;
@@ -606,6 +630,7 @@ pub fn start(store: &Store, environment: &Environment, id: &str, terminal: &str)
         state: "running".into(),
         message: "Complete authentication in the external terminal.".into(),
         overview: None,
+        logs: String::new(),
     };
     let result_path = directory.join(format!("{id}.result"));
     write_json(&result_path, &job)?;
@@ -625,6 +650,99 @@ pub fn start(store: &Store, environment: &Environment, id: &str, terminal: &str)
         return Err(error);
     }
     Ok(job)
+}
+
+fn execute_hostname(
+    host: &Host,
+    hostname: &str,
+    dispatched: &mut bool,
+    invoke: &mut impl FnMut(&str, serde_json::Value) -> Result<serde_json::Value>,
+) -> Result<Overview> {
+    let facts = invoke(
+        "ansible.builtin.setup",
+        serde_json::json!({"gather_subset": ["!all", "!min", "distribution"], "filter": "ansible_distribution"}),
+    )?;
+    if facts["ansible_facts"]["ansible_distribution"] != "Ubuntu" {
+        return Err("Hostname editing currently supports Ubuntu servers.".into());
+    }
+    *dispatched = true;
+    invoke(
+        "ansible.builtin.hostname",
+        serde_json::json!({"name": hostname, "use": "systemd"}),
+    )?;
+    let verified = invoke(
+        "ansible.builtin.command",
+        serde_json::json!({"argv": ["/usr/bin/hostname"]}),
+    )?;
+    if verified["stdout"].as_str().map(str::trim) != Some(hostname) {
+        return Err("Hostname change could not be verified.".into());
+    }
+    Ok(Overview {
+        target: Some(host.clone()),
+        collected_at: now(),
+        elevated: true,
+        supported: true,
+        sections: vec![Section {
+            id: "system".into(),
+            status: "ok".into(),
+            output: format!("Hostname: {hostname}"),
+            truncated: false,
+        }],
+    })
+}
+
+/// Hostname changes share reviewed, single-use operation IDs, but execute via Ansible.
+fn start_hostname(store: &Store, environment: &Environment, request: Request) -> Result<Job> {
+    let directory = jobs_dir(store)?;
+    let lock = HostLock::acquire(&directory.join(format!("{}.lock", request.host.id)))?;
+    let root = crate::automation::private_root()?;
+    let prepared = ssh::prepare(&request.host, environment, root.path())?;
+    let mut variables = crate::automation::host_variables(&request.host, &prepared);
+    variables["ansible_become"] = serde_json::json!(true);
+    variables["ansible_become_method"] = serde_json::json!("sudo");
+    variables["ansible_become_user"] = serde_json::json!("root");
+    variables["ansible_become_flags"] = serde_json::json!("-H -S -n");
+    claim(&directory.join(format!("{}.started", request.id)))?;
+    let job = Job {
+        id: request.id.clone(),
+        host_id: request.host.id.clone(),
+        state: "running".into(),
+        message: "Changing hostname through Ansible.".into(),
+        overview: None,
+        logs: String::new(),
+    };
+    let path = directory.join(format!("{}.result", request.id));
+    write_json(&path, &job)?;
+    let accepted = job.clone();
+    let failed_path = path.clone();
+    std::thread::Builder::new().name("ansible-hostname".into()).spawn(move || {
+        let _lock = lock;
+        let _prepared = prepared;
+        let mut job = job;
+        let mut dispatched = false;
+        let result = (|| -> Result<Overview> {
+            let Action::SetHostname { hostname } = &request.action else { return Err("Invalid hostname action.".into()); };
+            let mut invoke = |module: &str, args: serde_json::Value| {
+                let previous = job.logs.clone();
+                crate::ansible::invoke(root.path(), variables.clone(), module, args, Duration::from_secs(60), &mut |output| {
+                    let combined = format!("{previous}\n{module}\n{output}");
+                    let tail: String = combined.chars().rev().take(65536).collect::<String>().chars().rev().collect();
+                    if job.logs != tail { job.logs = tail; let _ = write_json(&path, &job); }
+                })
+            };
+            execute_hostname(&request.host, hostname, &mut dispatched, &mut invoke)
+        })();
+        match result {
+            Ok(overview) => { job.state = "succeeded".into(); job.message = "Hostname changed and verified.".into(); job.overview = Some(overview); }
+            Err(error) => { job.state = if dispatched { "unknown" } else { "failed" }.into(); job.message = if dispatched { format!("{error} Refresh the host before retrying; the change may have applied.") } else { error }; }
+        }
+        if let Err(error) = write_json(&path, &job) { log::error!("Could not persist hostname result: {error}"); }
+    }).map_err(|_| {
+        let failed = Job { state: "failed".into(), message: "Cannot start hostname worker.".into(), ..accepted.clone() };
+        let _ = write_json(&failed_path, &failed);
+        "Cannot start hostname worker.".to_owned()
+    })?;
+    Ok(accepted)
 }
 
 pub fn status(store: &Store, host_id: &str, id: &str) -> Result<Job> {
@@ -774,6 +892,7 @@ pub fn session_helper(args: &[OsString]) -> i32 {
                 state: "succeeded".into(),
                 message: "Operation completed; host information refreshed.".into(),
                 overview: Some(overview),
+                logs: String::new(),
             },
             Err(error) => Job {
                 id: id.into(),
@@ -786,6 +905,7 @@ pub fn session_helper(args: &[OsString]) -> i32 {
                 .into(),
                 message: error,
                 overview: None,
+                logs: String::new(),
             },
         };
         write_json(&directory.join(format!("{id}.result")), &job)?;

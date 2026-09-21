@@ -13,9 +13,15 @@ test.describe('inventory with mocked native IPC', () => {
       Object.assign(window, {
         isTauri: true,
         __TAURI_INTERNALS__: {
-          invoke: async (command: string, args: { id?: string; settings?: Host['settings']; terminal?: string } = {}) => {
+          invoke: async (command: string, args: { id?: string; settings?: Host['settings']; terminal?: string; action?: { hostname: string } } = {}) => {
             const hosts: Host[] = JSON.parse(localStorage.getItem('test-hosts') ?? '[]');
             switch (command) {
+              case 'review_host_action':
+                localStorage.setItem('test-hostname', args.action?.hostname ?? '');
+                return { id: 'rename', host: hosts.find(host => host.id === args.id) };
+              case 'start_host_action': return { id: 'rename', hostId: 'production', state: 'succeeded', logs: 'ansible.builtin.hostname SUCCESS', overview: {
+                sections: [{ id: 'system', status: 'ok', truncated: false, output: 'Hostname: ' + localStorage.getItem('test-hostname') }],
+              } };
               case 'list_hosts': return hosts;
               case 'list_host_groups': return [];
               case 'latest_ping': return null;
@@ -26,7 +32,7 @@ test.describe('inventory with mocked native IPC', () => {
                 if (localStorage.getItem('test-os-error')) throw new Error('Temporary SSH failure');
                 if (args.id === 'staging') throw new Error('SSH authentication required.');
                 return { collectedAt: 1, supported: true, elevated: false, sections: [
-                  { id: 'system', status: 'ok', truncated: false, output: 'PRETTY_NAME="Ubuntu 24.04.1 LTS"\nKernel: Linux 6.8.0 x86_64 GNU/Linux' },
+                  { id: 'system', status: 'ok', truncated: false, output: 'PRETTY_NAME="Ubuntu 24.04.1 LTS"\nHostname: ubuntu-server\nKernel: Linux 6.8.0 x86_64 GNU/Linux' },
                 ] };
               case 'save_host': {
                 if (!args.settings) throw new Error('Missing settings');
@@ -83,6 +89,27 @@ test.describe('inventory with mocked native IPC', () => {
     await expect(page.getByRole('heading', { name: 'No hosts yet' })).toBeVisible();
     await page.reload();
     await expect(page.getByRole('heading', { name: 'No hosts yet' })).toBeVisible();
+  });
+
+  test('changes the hostname inline with keyboard save and cancel', async ({ page }) => {
+    await page.evaluate(() => localStorage.setItem('test-hosts', JSON.stringify([
+      { id: 'production', settings: { name: 'Production', address: '192.0.2.10', username: 'admin', port: 22, authentication: { kind: 'keyFile', filename: 'id_ed25519' } } },
+    ])));
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Copy hostname for Production' })).toHaveText('ubuntu-server');
+    await page.getByRole('button', { name: 'Change hostname for Production' }).click();
+    const input = page.getByRole('textbox', { name: 'System hostname', exact: true });
+    await expect(input).toBeFocused();
+    await input.fill('cancel-me'); await input.press('Escape');
+    await expect(input).toHaveCount(0);
+    await page.getByRole('button', { name: 'Change hostname for Production' }).click();
+    await input.fill('web-01'); await input.press('Enter');
+    await expect(page.getByRole('button', { name: 'Copy hostname for Production' })).toHaveText('web-01');
+    await expect(page.getByText('Hostname changed to web-01.', { exact: true })).toBeVisible();
+    await expect(page).toHaveURL(/\/hosts$/);
+    await expect(page.locator('.endpoint')).toHaveText('admin@192.0.2.10');
+    await page.getByText('Ansible logs', { exact: true }).click();
+    await expect(page.getByText('ansible.builtin.hostname SUCCESS', { exact: true })).toBeVisible();
   });
 
   test('shows quick info and icon shortcuts in cards and a responsive list', async ({ page, browserName }, testInfo) => {

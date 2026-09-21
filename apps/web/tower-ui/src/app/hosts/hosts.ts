@@ -42,12 +42,18 @@ export class Hosts implements OnInit {
     const results = this.selection.pingResults();
     return new Map(this.hosts().map(host => {
       const result = results.get(host.id);
-      const changed = result && JSON.stringify(result.host.settings) !== JSON.stringify(host.settings);
+      // A rename does not invalidate an SSH/Python reachability result.
+      const connection = ({ settings }: Host) => {
+        const auth = settings.authentication;
+        return JSON.stringify([settings.address, settings.port, settings.username, auth.kind,
+          auth.kind === 'agent' ? auth.fingerprint : auth.filename]);
+      };
+      const changed = result && connection(result.host) !== connection(host);
       const error = this.pingError() && (!this.pingRun() || this.pingRun()?.results.some(r => r.host.id === host.id)) ? this.pingError() : '';
       const outcome = error ? 'unavailable' : changed ? 'changed' : result?.outcome ?? (this.pingLoaded() ? 'unchecked' : 'loading');
       const labels: Record<string, string> = {
         waiting: 'Waiting', successful: 'Passed', unreachable: 'Unreachable', failed: 'Failed',
-        cancelled: 'Cancelled', 'timed-out': 'Timed out', changed: 'Settings changed',
+        cancelled: 'Cancelled', 'timed-out': 'Timed out', changed: 'Connection changed',
         unchecked: 'Not checked', loading: 'Loading', unavailable: 'Status unavailable',
       };
       const tooltips: Record<string, string> = {
@@ -65,7 +71,7 @@ export class Hosts implements OnInit {
       const color = outcome === 'successful' ? 'bg-emerald-500 ring-emerald-500/10' :
         ['unreachable', 'failed', 'timed-out'].includes(outcome) ? 'bg-red-500 ring-red-500/10' :
         outcome === 'waiting' ? 'bg-blue-500 ring-blue-500/10' : 'bg-slate-400 ring-slate-400/10';
-      const detail = error || (changed ? 'Host settings changed since this result. Run Ping again.' :
+      const detail = error || (changed ? 'SSH connection settings changed since this result. Run Ping again.' :
         result ? result.diagnostics || (result.outcome === 'waiting' ? 'Waiting for Ansible to report a result.' : 'No additional diagnostics reported.') : 'No Ping result for this host in the latest run.');
       return [host.id, { outcome, label: labels[outcome], tooltip: tooltips[outcome], color, detail }];
     }));
@@ -241,6 +247,67 @@ export class Hosts implements OnInit {
     });
   }
   readonly systemInfo = inject(HostsService).systemInfo;
+  readonly hostnameEdits = signal<Record<string, { value: string; editing: boolean; pending: boolean; message: string; error: string; logs: string }>>({});
+
+  editHostname(host: Host) {
+    if (this.hostnameEdits()[host.id]?.pending) return;
+    this.hostnameEdits.update(edits => ({ ...edits, [host.id]: {
+      value: this.systemInfo()[host.id]?.hostname ?? '', editing: true, pending: false, message: '', error: '', logs: '',
+    } }));
+    afterNextRender(() => {
+      const input = this.element.nativeElement.querySelector<HTMLInputElement>(`[id="hostname-${host.id}"]`);
+      input?.focus(); input?.select();
+    }, { injector: this.injector });
+  }
+
+  hostnameValue(id: string, value: string) {
+    this.hostnameEdits.update(edits => ({ ...edits, [id]: { ...edits[id], value } }));
+  }
+
+  cancelHostname(id: string) {
+    if (this.hostnameEdits()[id]?.pending) return;
+    this.hostnameEdits.update(edits => ({ ...edits, [id]: { ...edits[id], editing: false, error: '' } }));
+  }
+
+  async saveHostname(host: Host) {
+    const edit = this.hostnameEdits()[host.id];
+    if (!edit?.editing || edit.pending) return;
+    const hostname = edit.value.trim();
+    const update = (patch: Partial<typeof edit>) => this.hostnameEdits.update(edits => ({ ...edits, [host.id]: { ...edits[host.id], ...patch } }));
+    if (!hostname || hostname.length > 64 || !hostname.split('.').every(label => label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label))) {
+      update({ error: 'Use up to 64 lowercase letters, digits, hyphens or dots. Each label must start and end with a letter or digit.' });
+      return;
+    }
+    if (hostname === this.systemInfo()[host.id]?.hostname) { this.cancelHostname(host.id); return; }
+    update({ pending: true, error: '', message: 'Changing hostname through Ansible…' });
+    try {
+      const review = await this.service.review(host.id, { kind: 'setHostname', hostname });
+      if (this.destroyRef.destroyed) return;
+      if (review.host.id !== host.id || JSON.stringify(review.host.settings) !== JSON.stringify(host.settings)) throw new Error('Host settings changed. Open the editor again.');
+      let job = await this.service.start(review.id, this.terminal());
+      while (!this.destroyRef.destroyed) {
+        if (job.hostId !== host.id || job.id !== review.id) throw new Error('Hostname operation does not match this host. Refresh to check its hostname.');
+        update({ logs: job.logs ?? '' });
+        if (job.state !== 'running') break;
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (this.destroyRef.destroyed) return;
+        job = await this.service.operation(host.id, review.id);
+      }
+      if (this.destroyRef.destroyed) return;
+      if (job.state !== 'succeeded') throw new Error(job.message);
+      const system = job.overview?.sections.find(section => section.id === 'system' && section.status === 'ok' && !section.truncated);
+      const detected = system?.output.split('\n').find(line => line.startsWith('Hostname:'))?.slice('Hostname:'.length).trim();
+      if (detected !== hostname) throw new Error('Hostname change could not be verified. Refresh before retrying.');
+      const current = this.hosts().find(item => item.id === host.id);
+      if (!current || JSON.stringify(current.settings) !== JSON.stringify(host.settings)) return;
+      this.systemInfo.update(info => info[host.id] ? { ...info, [host.id]: { ...info[host.id], hostname: detected, pending: false } } : info);
+      update({ editing: false, message: `Hostname changed to ${detected}.` });
+    } catch (error) {
+      if (!this.destroyRef.destroyed) update({ error: String(error), message: '' });
+    } finally {
+      if (!this.destroyRef.destroyed) update({ pending: false });
+    }
+  }
   private systemTimer?: ReturnType<typeof setInterval>;
   readonly sort = signal('name');
   readonly layout = signal<'cards' | 'list'>('list');
