@@ -335,6 +335,24 @@ fn run_remote(
     action: &Action,
     interactive: bool,
 ) -> Result<RemoteOutput> {
+    run_remote_command(
+        host,
+        environment,
+        directory,
+        remote_command(action)?,
+        interactive,
+        90,
+    )
+}
+
+fn run_remote_command(
+    host: &Host,
+    environment: &Environment,
+    directory: &Path,
+    remote: String,
+    interactive: bool,
+    timeout_seconds: u64,
+) -> Result<RemoteOutput> {
     let prepared = ssh::prepare(host, environment, directory)?;
     let mut command = Command::new("/usr/bin/ssh");
     command.arg("-T");
@@ -343,7 +361,7 @@ fn run_remote(
     }
     command
         .args(&prepared.arguments)
-        .arg(remote_command(action)?)
+        .arg(remote)
         .env_remove("SSH_ASKPASS")
         .env("SSH_ASKPASS_REQUIRE", "never")
         .env_remove("SSH_SK_PROVIDER")
@@ -381,8 +399,12 @@ fn run_remote(
         }
         bytes
     });
-    let deadline =
-        Instant::now() + Duration::from_secs(if interactive { RUN_TTL - 15 } else { 90 });
+    let deadline = Instant::now()
+        + Duration::from_secs(if interactive {
+            RUN_TTL - 15
+        } else {
+            timeout_seconds
+        });
     let (code, limited) = loop {
         if overflow.load(Ordering::Relaxed) || Instant::now() >= deadline {
             let _ = child.kill();
@@ -404,6 +426,38 @@ fn run_remote(
         code,
         output,
         limited: limited || overflow.load(Ordering::Relaxed),
+    })
+}
+
+/// Inventory metadata must not wait for services, firewall, journal, or disk inspection.
+pub fn system_info(store: &Store, environment: &Environment, id: &str) -> Result<Overview> {
+    let host = store.get(id)?;
+    let script = "export LC_ALL=C PATH=/usr/sbin:/usr/bin:/sbin:/bin; cat /etc/os-release || exit; printf '\nHostname: '; hostname; printf 'Kernel: '; uname -srmo";
+    let output = run_remote_command(
+        &host,
+        environment,
+        &store.directory,
+        format!("/bin/sh -c {}", quote(script)),
+        false,
+        20,
+    )?;
+    if output.limited || output.code != Some(0) {
+        return Err(
+            "Could not refresh OS information over SSH. Last known information was retained."
+                .into(),
+        );
+    }
+    Ok(Overview {
+        target: Some(host),
+        collected_at: now(),
+        elevated: false,
+        supported: true,
+        sections: vec![Section {
+            id: "system".into(),
+            status: "ok".into(),
+            output: String::from_utf8_lossy(&output.output).into_owned(),
+            truncated: false,
+        }],
     })
 }
 

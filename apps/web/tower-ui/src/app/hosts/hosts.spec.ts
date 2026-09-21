@@ -1,21 +1,26 @@
+import { signal } from '@angular/core';
+import { RebootsService, RebootRun } from '../automation/reboot/reboots.service';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
 import { Clipboard } from '@angular/cdk/clipboard';
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { AutomationService, PingRun } from '../automation/automation.service';
 import { Hosts } from './hosts';
-import { Host, HostOverview, HostsService } from './hosts.service';
+import { Host, HostOverview, HostsService, HostSystemInfo } from './hosts.service';
 
 const saved: Host = { id: 'host-1', settings: { name: 'Production', address: 'server.example.com', username: 'admin', port: 22, authentication: { kind: 'keyFile', filename: 'id_ed25519' } } };
 const overview: HostOverview = { collectedAt: 1, supported: true, elevated: false, sections: [
-  { id: 'system', status: 'ok', truncated: false, output: 'PRETTY_NAME="Ubuntu 24.04.1 LTS"\nKernel: Linux 6.8.0 x86_64 GNU/Linux' },
+  { id: 'system', status: 'ok', truncated: false, output: 'PRETTY_NAME="Ubuntu 24.04.1 LTS"\nHostname: ubuntu-server\nKernel: Linux 6.8.0 x86_64 GNU/Linux' },
 ] };
 
 describe('Hosts', () => {
   let component: Hosts;
   let fixture: ComponentFixture<Hosts>;
   let automation: { latest: ReturnType<typeof vi.fn>; groups: ReturnType<typeof vi.fn>; save: ReturnType<typeof vi.fn> };
+  let reboots: { preview: ReturnType<typeof vi.fn>; latest: ReturnType<typeof vi.fn>; apply: ReturnType<typeof vi.fn>; refresh: ReturnType<typeof vi.fn> };
   let service: {
+    systemInfo: ReturnType<typeof signal<Record<string, HostSystemInfo>>>;
+    system: ReturnType<typeof vi.fn>;
     desktop: boolean;
     list: ReturnType<typeof vi.fn>;
     identities: ReturnType<typeof vi.fn>;
@@ -28,6 +33,8 @@ describe('Hosts', () => {
 
   beforeEach(async () => {
     service = {
+      systemInfo: signal<Record<string, HostSystemInfo>>({}),
+      system: vi.fn(),
       desktop: true,
       inspect: vi.fn().mockResolvedValue(overview),
       list: vi.fn().mockResolvedValue([saved]),
@@ -35,15 +42,78 @@ describe('Hosts', () => {
       terminals: vi.fn().mockResolvedValue([{ id: 'xterm', label: 'xterm' }]),
       save: vi.fn().mockResolvedValue(saved), delete: vi.fn().mockResolvedValue(undefined), connect: vi.fn().mockResolvedValue(undefined),
     };
+    service.system = service.inspect;
     automation = { latest: vi.fn().mockResolvedValue(null), groups: vi.fn().mockResolvedValue([]), save: vi.fn().mockImplementation(async (id, name, memberIds) => ({ id: id ?? 'group-1', name, memberIds })) };
+    reboots = { preview: vi.fn(), latest: vi.fn(), apply: vi.fn(), refresh: vi.fn() };
     await TestBed.configureTestingModule({
-      imports: [Hosts], providers: [provideRouter([]), { provide: HostsService, useValue: service }, { provide: AutomationService, useValue: automation }],
+      imports: [Hosts], providers: [{ provide: RebootsService, useValue: reboots }, provideRouter([]), { provide: HostsService, useValue: service }, { provide: AutomationService, useValue: automation }],
     }).compileComponents();
 
     vi.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
     fixture = TestBed.createComponent(Hosts);
     component = fixture.componentInstance;
     await fixture.whenStable();
+  });
+
+  it('keeps row actions inline and reboots exactly the clicked host after preflight', async () => {
+    component.selection.hostIds.set(['other']); component.selection.groupIds.set(['group']);
+    const ping = vi.spyOn(component.runner, 'runPing').mockResolvedValue(null);
+    const review: RebootRun = { id: 'r1', targetLabel: 'Production', phase: 'review', active: false, stopRequested: false,
+      results: [{ host: saved, state: 'ready', message: 'Review ready', logs: '', rebootRequired: true, plan: null }] };
+    reboots.preview.mockResolvedValue(review); reboots.apply.mockResolvedValue({ ...review, phase: 'finished' });
+    fixture.detectChanges();
+    fixture.nativeElement.querySelector('[aria-label="Ping Production"]').click();
+    await fixture.whenStable();
+    expect(ping).toHaveBeenCalledExactlyOnceWith(saved.id);
+    fixture.nativeElement.querySelector('[aria-label="Reboot Production"]').click();
+    await fixture.whenStable(); fixture.detectChanges();
+    expect(reboots.preview).toHaveBeenCalledExactlyOnceWith({ hostIds: [saved.id], groupIds: [] });
+    expect(component.selection.snapshot()).toEqual({ hostIds: ['other'], groupIds: ['group'] });
+    expect(TestBed.inject(Router).navigateByUrl).not.toHaveBeenCalled();
+    expect(reboots.apply).toHaveBeenCalledExactlyOnceWith('r1');
+  });
+
+  it('does not reboot when preflight fails or targets a different host', async () => {
+    for (const result of [{ host: saved, state: 'failed' }, { host: { ...saved, id: 'other' }, state: 'ready' }]) {
+      reboots.preview.mockResolvedValue({ id: 'review', phase: 'review', active: false, results: [result] });
+      await component.quickReboot(saved);
+    }
+    expect(reboots.apply).not.toHaveBeenCalled();
+  });
+
+  it('waits for preflight, ignores duplicate clicks, and never reapplies while polling', async () => {
+    vi.useFakeTimers();
+    try {
+      const review = { id: 'review', phase: 'preview', active: true, results: [{ host: saved, state: 'waiting' }] };
+      reboots.preview.mockResolvedValue(review);
+      reboots.latest.mockResolvedValue({ ...review, phase: 'review', active: false, results: [{ host: saved, state: 'ready' }] });
+      reboots.apply.mockResolvedValue({ ...review, phase: 'apply' });
+      const pending = component.quickReboot(saved); await Promise.resolve();
+      await component.quickReboot(saved);
+      expect(reboots.preview).toHaveBeenCalledTimes(1);
+      expect(reboots.apply).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1500); await pending;
+      expect(reboots.apply).toHaveBeenCalledExactlyOnceWith('review');
+      await component.pollReboot();
+      expect(reboots.apply).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('retains other host results during and after a single-host Ping, including navigation', async () => {
+    const other = { ...saved, id: 'other' };
+    component.hosts.set([saved, other]);
+    automation.latest.mockResolvedValue({ id: 'all', active: false, results: [saved, other].map(host => ({ host, outcome: 'successful', diagnostics: 'OK' })) });
+    await component.refreshPing();
+    const previous = component.pingStatuses().get('other');
+    for (const outcome of ['waiting', 'failed']) {
+      automation.latest.mockResolvedValue({ id: 'one', active: false, results: [{ host: saved, outcome, diagnostics: 'Changed' }] });
+      await component.refreshPing();
+      expect(component.pingStatuses().get('other')).toEqual(previous);
+      expect(component.pingStatuses().get(saved.id)?.outcome).toBe(outcome);
+    }
+    fixture.destroy(); fixture = TestBed.createComponent(Hosts); component = fixture.componentInstance;
+    await fixture.whenStable(); component.hosts.set([saved, other]);
+    expect(component.pingStatuses().get('other')).toEqual(previous);
   });
 
   it('shows latest Ping outcomes by host ID and invalidates changed settings', async () => {
@@ -180,27 +250,57 @@ describe('Hosts', () => {
 
   it('shows the inspected OS and kernel without blocking inventory actions', async () => {
     await fixture.whenStable();
-    expect(component.systemInfo()[saved.id]).toMatchObject({ name: 'Ubuntu 24.04.1 LTS', kernel: 'Linux 6.8.0 x86_64 GNU/Linux', pending: false });
+    expect(component.systemInfo()[saved.id]).toMatchObject({ name: 'Ubuntu 24.04.1 LTS', hostname: 'ubuntu-server', kernel: 'Linux 6.8.0 x86_64 GNU/Linux', pending: false });
     expect(fixture.nativeElement.querySelector('.os-summary').textContent).toContain('Ubuntu 24.04.1 LTS');
+    component.toggleInfo(saved.id); fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('[aria-label="Copy hostname for Production"]').textContent).toBe('ubuntu-server');
     expect(component.busy()).toBe(false);
   });
 
-  it('reports unavailable OS data and recovers on refresh', async () => {
+  it('retains last known OS on transient errors and recovers on refresh', async () => {
     service.inspect.mockRejectedValueOnce('SSH authentication required.');
     await component.refresh();
     await fixture.whenStable();
-    expect(component.systemInfo()[saved.id]).toMatchObject({ name: '', pending: false, error: 'SSH authentication required.' });
+    expect(component.systemInfo()[saved.id]).toMatchObject({ name: 'Ubuntu 24.04.1 LTS', hostname: 'ubuntu-server', pending: false, error: 'SSH authentication required.' });
     expect(component.error()).toBe('');
     await component.refresh();
     await fixture.whenStable();
     expect(component.systemInfo()[saved.id].name).toBe('Ubuntu 24.04.1 LTS');
   });
 
+  it('keeps cached OS visible while refreshing and across navigation', async () => {
+    let finish!: (value: HostOverview) => void;
+    service.inspect.mockImplementationOnce(() => new Promise<HostOverview>(resolve => { finish = resolve; }));
+    await component.refresh(); fixture.detectChanges();
+    expect(component.systemInfo()[saved.id].pending).toBe(true);
+    expect(fixture.nativeElement.querySelector('.os-summary').textContent).toContain('Ubuntu 24.04.1 LTS');
+    finish(overview); await fixture.whenStable();
+    fixture.destroy();
+    fixture = TestBed.createComponent(Hosts); component = fixture.componentInstance;
+    expect(component.systemInfo()[saved.id].name).toBe('Ubuntu 24.04.1 LTS');
+    await fixture.whenStable();
+  });
+
+  it('automatically retries failed OS refreshes without a manual refresh', async () => {
+    vi.useFakeTimers();
+    try {
+      fixture.destroy();
+      service.inspect.mockRejectedValueOnce('Temporary SSH failure');
+      fixture = TestBed.createComponent(Hosts); component = fixture.componentInstance;
+      await component.ngOnInit(); await Promise.resolve();
+      expect(component.systemInfo()[saved.id].error).toBe('Temporary SSH failure');
+      const calls = service.inspect.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(service.inspect.mock.calls.length).toBeGreaterThan(calls);
+      expect(component.systemInfo()[saved.id].error).toBe('');
+    } finally { vi.useRealTimers(); }
+  });
+
   it('does not infer an OS from a missing or failed system section', async () => {
     service.inspect.mockResolvedValue({ ...overview, sections: [{ ...overview.sections[0], status: 'failed' }] });
     await component.refresh();
     await fixture.whenStable();
-    expect(component.systemInfo()[saved.id].name).toBe('');
+    expect(component.systemInfo()[saved.id].name).toBe('Ubuntu 24.04.1 LTS');
     expect(component.systemInfo()[saved.id].error).toContain('unavailable');
   });
 
@@ -210,7 +310,7 @@ describe('Hosts', () => {
     const hosts = [saved, { ...saved, id: 'host-2' }, { ...saved, id: 'host-3' }];
     service.list.mockResolvedValue(hosts);
     await component.refresh();
-    expect(service.inspect).toHaveBeenCalledTimes(2);
+    expect(service.inspect).toHaveBeenCalledTimes(3);
     expect(component.busy()).toBe(false);
     await component.remove(saved);
     finish[0](overview);

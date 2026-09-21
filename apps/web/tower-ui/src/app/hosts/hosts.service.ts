@@ -1,4 +1,4 @@
-import { Injectable } from '@angular/core';
+import { Injectable, signal } from '@angular/core';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 
 export type Authentication =
@@ -33,9 +33,26 @@ export interface HostOverview { target?: Host | null; collectedAt: number; eleva
 export interface ActionReview { id: string; host: Host; summary: string; command: string; warning: string; expiresAt: number }
 export interface HostOperation { id: string; hostId: string; state: string; message: string; overview: HostOverview | null }
 
+export interface HostSystemInfo {
+  name: string; hostname: string; kernel: string; pending: boolean; error: string;
+  settings: string; updatedAt: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class HostsService {
   readonly desktop = isTauri();
+  readonly systemInfo = signal<Record<string, HostSystemInfo>>({});
+  private readonly systemRequests = new Map<string, Promise<HostOverview>>();
+  system(host: Host) {
+    const key = JSON.stringify([host.id, host.settings]);
+    let request = this.systemRequests.get(key);
+    if (!request) {
+      request = this.call<HostOverview>('host_system_info', { id: host.id })
+        .finally(() => this.systemRequests.delete(key));
+      this.systemRequests.set(key, request);
+    }
+    return request;
+  }
 
   private call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
     if (!this.desktop) return Promise.reject(new Error('Host inventory requires the Linux desktop app.'));

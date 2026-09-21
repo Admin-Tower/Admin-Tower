@@ -127,6 +127,19 @@ an unlocked key into an agent outside Admin-Tower and select that identity if
 your key requires a passphrase. Establish verified server trust outside the app.
 A preparation failure affects only that host; valid members continue.
 
+Quick Ping on a host row runs independently of other hosts and bulk Ping. Only
+that host's button is disabled while its check runs; results update in place and
+preserve other hosts' statuses. Quick jobs remain active across navigation and
+are cancelled when the desktop shuts down.
+
+Inventory hostname/OS/kernel information uses a dedicated, read-only SSH query instead of
+full host inspection. Last known values remain visible during refresh and transient
+failures (the tooltip identifies retained data), and survive navigation within the
+session. Queries are deduplicated by saved connection and run up to four at a time.
+While the inventory is visible, failed queries retry every 15 seconds and known
+metadata refreshes after 60 seconds. Successful Ping and reboot results trigger
+an OS refresh too. Changed connection settings invalidate cached metadata.
+
 On desktop startup, Admin-Tower automatically runs Ping once against all saved hosts.
 The check runs in the background without changing your selection or opening another
 page. Empty inventories are skipped; navigation does not trigger another check.
@@ -160,6 +173,74 @@ and loopback/Unix sockets. Its opt-in fixture executes the pipelined ping module
 with a fixed local Python interpreter; it never executes received shell commands
 or contacts production hosts. Browser group tests use mocked native IPC and
 provide separate evidence for UI behavior.
+
+## Ubuntu Server package updates
+
+**Automation → Ubuntu package updates** uses the existing host/group selection.
+Opening the task does not run updates. Choose **Preview updates**, review each
+host's installed/proposed versions, then **Apply reviewed updates**. Preview
+refreshes APT indexes and creates a root-owned plan; it installs no packages.
+Previews expire after 15 minutes. Inventory changes require a fresh preview.
+
+The initial scope is conservative package maintenance on Ubuntu Server:
+
+- Remote requirements: Ubuntu, a running systemd system, `/usr/bin/python3`
+  with `python3-apt`, trusted repositories, and SSH as root or with noninteractive
+  passwordless sudo. The app never installs prerequisites or edits sudoers.
+- Uses the existing isolated local Ansible process and hardened SSH identities
+  and known-host verification. No caller-supplied commands, playbooks or paths.
+- Checks free space (including `/boot`), the package database, and failed services.
+  Repository refresh errors block the preview instead of silently using old indexes.
+- Uses APT's conservative upgrade resolver: no new packages, removals, downgrades,
+  held-package changes, or unauthenticated downloads. Common kernel, bootloader,
+  firmware and initramfs packages are excluded; deferred updates are displayed.
+  No release upgrades or reboots. Existing configuration files are retained using
+  `--force-confdef` and `--force-confold`; package scripts may still restart services.
+- Applies hosts sequentially and stops after a failure or an unconfirmed outcome.
+  **Stop after current host** leaves the current installation running.
+- Recomputes and compares exact package/version changes under APT's frontend lock,
+  retaining that lock through installation. State changes or expired previews
+  fail closed. Existing package-manager locks are respected, never deleted.
+- Verifies installed versions, `dpkg --audit`, and newly failed systemd units.
+  Reboot requirements are reported separately. Application endpoints are not
+  checked, and a successful result is not proof of application compatibility.
+
+The fixed helper is transported with
+[`ansible.builtin.script`](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/script_module.html).
+It uses Ubuntu's Python APT bindings to keep plan validation and installation
+under the same frontend lock, rather than release the lock between simulation
+and installation. Apply starts a unique systemd service on the server. Closing
+the desktop or losing SSH does not kill that service or its package transaction.
+After restarting the desktop, use **Refresh remote status**; the app never
+resumes the remaining hosts automatically or launches the same reviewed run twice.
+
+The latest run is atomically recorded in `package-updates.json` in the native
+application data directory (mode 0600); a process lock prevents two desktop
+instances from managing package updates there simultaneously. Remote plans,
+results, and helper logs live under
+`/var/lib/admin-tower/package-updates/<run-id>/`, with private root-owned files.
+The service is named `admin-tower-apt-<run-id>.service`; package-manager output
+is appended to `operation.log`. Records are retained for diagnosis and are not pruned
+by this first version.
+
+A launch without a terminal result is **Outcome unconfirmed**, never success.
+A status check safely retires an unlaunched run so a delayed launch cannot follow.
+If a service has disappeared without recording its result (for example after a
+server reboot), inspect the service journal and package database on the server;
+the app deliberately blocks another run while its outcome remains unconfirmed.
+There is no automatic rollback or forced package repair.
+
+Validation: `pnpm nx run tower-desktop:test` includes unprivileged Python helper
+regressions and native journal/rollout tests. `pnpm nx run
+tower-desktop:test-packages-transport` exercises real Ansible with a local,
+unprivileged connection and verifies that preview/apply/status refuse privilege;
+it cannot install packages. UI tests cover explicit review, frozen run IDs,
+uncertain outcomes and mobile layout using mocked native IPC. These checks do
+not establish a real Ubuntu installation or reboot outcome. Before production
+use, validate an approved update on a disposable Ubuntu Server VM, including
+SSH interruption, desktop restart, package/service failures and recovery.
+
+OS release upgrades and dedicated kernel maintenance are later tasks.
 
 ## Host administration (Ubuntu/Debian)
 
@@ -333,3 +414,71 @@ Tauri's origin/window permissions. Install the matching Playwright browsers with
 The optional `test-terminal` target requires a graphical desktop and briefly opens
 each installed supported terminal with a harmless argument-recording fixture. It
 does not start SSH or use any user credentials.
+
+### Live automation logs
+
+Ping and Ubuntu package updates show a **Live logs** panel with a selectable
+**Follow output** option. Ping streams Ansible's verbose command output. Package
+previews stream executed commands and output; installations also capture native
+APT/dpkg output in the remote `operation.log`. Installation uses the Python APT
+API, so the log labels that operation rather than inventing an `apt-get` command.
+The panel displays the latest 64 KiB, refreshed every few seconds while running
+(connection latency can increase this). Log transport uses the same selected
+SSH identity and trusted-host checks; a log failure does not cancel maintenance.
+Logs are displayed as plain text. Desktop log tails are session-only; full package
+logs remain on the host, and refreshing an unresolved run fetches its tail again.
+
+## Reviewed Ubuntu reboots
+
+The inventory row Reboot button starts a single-host reboot with one click. It
+runs preflight first, then submits that fresh review automatically if all checks
+pass. Compact progress and outcomes stay inline; detailed logs are available on the reboot automation page. There is no acknowledgement checkbox for this
+shortcut; clicking it authorizes the service interruption. Failed or uncertain
+requests are never automatically resubmitted.
+
+Open **Automation → Reboot Ubuntu hosts**, or choose **Review reboot** beside a
+pending reboot in package results. Opening the screen never submits a reboot.
+Select hosts/groups, run **Review reboot**, inspect the frozen host list and any
+packages named in Ubuntu's reboot-required marker, acknowledge downtime, then
+choose **Reboot N hosts now**. Reviews expire after 15 minutes and are invalidated
+by changed inventory settings or a changed boot ID. A reboot can activate an
+already installed kernel; it does not install deferred updates.
+
+The task uses [`ansible.builtin.reboot`](https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/reboot_module.html)
+with the existing isolated Ansible configuration, selected SSH identity, strict
+host-key verification and noninteractive sudo. A fixed remote dispatch guard
+checks Ubuntu/systemd, package database health and APT/dpkg locks, then records
+an at-most-once claim before requesting shutdown. No arbitrary caller command
+or automatic reboot is exposed. Package tasks and reboots are mutually blocked
+while either has an active or unconfirmed run in this desktop's durable state.
+
+Review and dispatch both validate `/usr/sbin/sshd -t` and require a persistently
+enabled, active `ssh.service` or `ssh.socket`, with a loaded SSH service and no
+pending daemon reload for the selected activation path. Runtime-only enablement
+does not qualify. The review shows the verified activation path; a failed check
+blocks reboot without changing SSH configuration. Ubuntu socket activation is
+supported even when `ssh.service` itself is disabled. The guarded reboot command
+is `/usr/sbin/shutdown -r now "Reboot requested through Admin-Tower"`.
+
+Hosts run sequentially. Verification requires a changed boot ID, working SSH,
+and systemd reaching `running` or `degraded`. Additional failed services stop
+remaining hosts and are reported separately; application endpoints are not
+checked. The Ansible wait is bounded (up to 600 seconds each for boot verification
+and readiness), and live command output is available in the task screen.
+
+**Stop after current host** and closing the desktop do not undo a submitted
+reboot. State is journaled in `reboots.json` before dispatch; an interrupted
+request becomes **Outcome unconfirmed**. **Refresh reboot status** only observes:
+it never calls the reboot module. If no dispatch exists, it retires the remote
+review under the same lock used by the dispatch guard, preventing a delayed
+request from rebooting after the UI reports that nothing was submitted. The app
+never automatically resumes remaining hosts or retries an uncertain reboot.
+Remote dispatch records live in `/var/lib/admin-tower/reboots/<run-id>/` and are
+retained for diagnosis. Live log tails are session-only.
+
+Validation includes unprivileged guard/lock/recovery tests and
+`pnpm nx run tower-desktop:test-reboot-transport`, which exercises the real Ansible
+module against a disposable SSH server that simulates boot changes and connection
+loss, never executing shutdown. Browser tests use mocked desktop commands.
+Actual VM/physical-host reboot and application recovery remain operator acceptance
+checks; development validation does not reboot production hosts.

@@ -147,6 +147,36 @@ def stream_ansible(channel, server):
     time.sleep(0.1)
 
 
+def stream_reboot(channel, server):
+    # Never execute a received reboot command. Simulate boot IDs and one lost
+    # verification connection; only the setup module uses the existing sandbox fixture.
+    command = server.command.decode()
+    changed = directory / "reboot-submitted"
+    if "Reboot requested through Admin-Tower" in command:
+        with (directory / "reboot-count").open("a") as output:
+            output.write("submitted\n")
+        changed.touch()
+        channel.sendall(b"Simulated reboot submitted\n")
+        channel.send_exit_status(0)
+    elif "/proc/sys/kernel/random/boot_id" in command:
+        retry = directory / "reboot-retry"
+        if changed.exists() and not retry.exists():
+            retry.touch()
+            channel.close()
+            return
+        boot = "22222222-2222-4222-8222-222222222222" if changed.exists() else "11111111-1111-4111-8111-111111111111"
+        channel.sendall((boot + "\n").encode())
+        channel.send_exit_status(0)
+    elif "systemctl is-system-running" in command:
+        channel.sendall(b"running\n")
+        channel.send_exit_status(0)
+    else:
+        stream_ansible(channel, server)
+        return
+    channel.shutdown_write()
+    time.sleep(0.1)
+
+
 def handle(client):
     transport = paramiko.Transport(client)
     try:
@@ -155,6 +185,9 @@ def handle(client):
         transport.start_server(server=server)
         channel = transport.accept(5)
         if channel is not None and server.executed.wait(5):
+            if (directory / "reboot-mode").exists():
+                stream_reboot(channel, server)
+                return
             if (directory / "ansible-mode").exists():
                 stream_ansible(channel, server)
                 return

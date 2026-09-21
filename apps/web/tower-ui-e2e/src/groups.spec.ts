@@ -18,6 +18,7 @@ test.beforeEach(async ({ page }) => {
           case 'list_hosts': return hosts;
           case 'list_identities': return { agentIdentities: [], keyFiles: ['test key'], agentError: null, keyError: null };
           case 'list_terminals': return [];
+          case 'host_system_info':
           case 'inspect_host': return { sections: [] };
           case 'list_host_groups': return groups;
           case 'save_host_group': {

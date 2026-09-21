@@ -9,6 +9,10 @@ mod htop;
 #[cfg(target_os = "linux")]
 mod inventory;
 #[cfg(target_os = "linux")]
+mod packages;
+#[cfg(target_os = "linux")]
+mod reboots;
+#[cfg(target_os = "linux")]
 mod ssh;
 
 /// Return before initializing the webview when launched by a terminal adapter.
@@ -38,9 +42,21 @@ pub fn run() {
         commands::save_host_group,
         commands::delete_host_group,
         commands::ansible_availability,
+        commands::start_quick_ping,
+        commands::latest_quick_ping,
         commands::start_ping,
         commands::latest_ping,
         commands::cancel_ping,
+        commands::preview_packages,
+        commands::latest_packages,
+        commands::apply_packages,
+        commands::refresh_packages,
+        commands::stop_packages,
+        commands::preview_reboots,
+        commands::latest_reboots,
+        commands::apply_reboots,
+        commands::refresh_reboots,
+        commands::stop_reboots,
         commands::start_htop,
         commands::poll_htop,
         commands::input_htop,
@@ -52,6 +68,7 @@ pub fn run() {
         commands::list_identities,
         commands::list_terminals,
         commands::connect_host,
+        commands::host_system_info,
         commands::inspect_host,
         commands::review_host_action,
         commands::start_host_action,
@@ -70,6 +87,8 @@ pub fn run() {
                     operations: std::sync::Mutex::new(()),
                     htop: Default::default(),
                     automation: Default::default(),
+                    packages: Default::default(),
+                    reboots: Default::default(),
                 });
                 // The runner spawns its worker immediately; SSH never blocks app setup.
                 if let Err(error) = backend
@@ -95,6 +114,12 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             if matches!(event, tauri::RunEvent::Exit) {
                 use tauri::Manager;
+                app.state::<std::sync::Arc<commands::Backend>>()
+                    .reboots
+                    .shutdown();
+                app.state::<std::sync::Arc<commands::Backend>>()
+                    .packages
+                    .shutdown();
                 app.state::<std::sync::Arc<commands::Backend>>()
                     .automation
                     .shutdown();

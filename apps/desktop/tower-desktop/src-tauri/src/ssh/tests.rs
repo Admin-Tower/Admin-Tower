@@ -625,12 +625,34 @@ fn live_ssh_administration_snapshot_uses_hardened_transport() {
     let command = fs::read_to_string(root.path().join("last-command")).unwrap();
     assert!(command.starts_with("/bin/sh -c "));
     assert!(!command.contains("sudo -S"));
+    // Package log reads reuse this hardened SSH transport and only a fixed UUID path.
+    let run_id = uuid::Uuid::new_v4().to_string();
+    fs::write(
+        root.path().join("snapshot"),
+        b"$ apt-get update\nfirst output\n",
+    )
+    .unwrap();
+    assert!(crate::packages::remote_log(&host, &environment, &run_id)
+        .unwrap()
+        .contains("first output"));
+    let log_command = fs::read_to_string(root.path().join("last-command")).unwrap();
+    assert_eq!(log_command, format!("/usr/bin/sudo -n -- /usr/bin/tail -c 65536 -- /var/lib/admin-tower/package-updates/{run_id}/operation.log"));
+    fs::write(
+        root.path().join("snapshot"),
+        b"$ apt-get update\nfirst output\nnext output\n",
+    )
+    .unwrap();
+    assert!(crate::packages::remote_log(&host, &environment, &run_id)
+        .unwrap()
+        .contains("next output"));
+    assert!(crate::packages::remote_log(&host, &environment, "../unsafe;command").is_err());
     fs::write(root.path().join("snapshot"), b"incomplete snapshot").unwrap();
     assert!(crate::admin::inspect(&store, &environment, &host.id)
         .unwrap_err()
         .contains("incomplete"));
     write_private(&environment.home.join(".ssh/known_hosts"), b"");
     assert!(crate::admin::inspect(&store, &environment, &host.id).is_err());
+    assert!(crate::packages::remote_log(&host, &environment, &run_id).is_err());
 }
 
 #[test]
@@ -1025,7 +1047,23 @@ fn live_ansible_ping_isolated_mixed_results_snapshot_cancel_and_timeout() {
     slow.username = "slow".into();
     store.save(Some(good.id.clone()), slow).unwrap();
     let run = automation.start(&store, &environment, &targets).unwrap();
-    std::thread::sleep(Duration::from_millis(1500));
+    let log_deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let progress = automation.latest().unwrap().unwrap();
+        assert!(
+            progress.active,
+            "Slow command finished before live output was observed"
+        );
+        if progress.logs.contains("SSH: EXEC") {
+            break;
+        }
+        assert!(
+            Instant::now() < log_deadline,
+            "No command logs before completion: {}",
+            progress.logs
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
     automation.cancel(&run.id).unwrap();
     assert_eq!(wait(&automation).results[0].outcome, "cancelled");
     assert_clean();
@@ -1039,4 +1077,51 @@ fn live_ansible_ping_isolated_mixed_results_snapshot_cancel_and_timeout() {
     automation.shutdown();
     assert!(automation.latest().unwrap().is_none());
     assert_clean();
+}
+
+#[test]
+#[ignore = "requires loopback SSH and real Ansible; reboot commands are simulated, never executed"]
+fn live_reboot_ansible_verifies_new_boot_and_recovers_connection() {
+    let (root, environment, store) = fixture();
+    let key = environment.home.join(".ssh/id_ed25519");
+    fs::remove_file(&key).unwrap();
+    generate_key(&key, "");
+    fs::copy(key.with_extension("pub"), root.path().join("client.pub")).unwrap();
+    fs::write(root.path().join("ansible-mode"), b"").unwrap();
+    fs::write(root.path().join("reboot-mode"), b"").unwrap();
+    let mut server = ChildGuard(
+        Command::new("/usr/bin/python3")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/ssh_server.py"))
+            .arg(root.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_for(&root.path().join("ready.json"), &mut server);
+    let ready: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.path().join("ready.json")).unwrap()).unwrap();
+    write_private(
+        &environment.home.join(".ssh/known_hosts"),
+        ready["knownHost"].as_str().unwrap().as_bytes(),
+    );
+    let mut input = settings();
+    input.address = "127.0.0.1".into();
+    input.username = "fixture".into();
+    input.port = ready["port"].as_u64().unwrap() as u16;
+    let host = store.save(None, input).unwrap();
+    let mut saw_live_command = false;
+    let result = crate::reboots::exercise_reboot_transport(&host, &environment, &mut |text| {
+        if text.contains("SSH: EXEC") {
+            saw_live_command = true;
+        }
+    })
+    .unwrap();
+    assert_eq!(result["rebooted"], true);
+    assert!(saw_live_command);
+    assert!(root.path().join("reboot-retry").exists());
+    assert_eq!(
+        fs::read_to_string(root.path().join("reboot-count")).unwrap(),
+        "submitted\n"
+    );
 }

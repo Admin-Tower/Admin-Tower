@@ -1,10 +1,11 @@
+import { RebootRun, RebootsService } from '../automation/reboot/reboots.service';
 import { AutomationRunner } from '../automation/automation-runner.service';
 import { InventorySelection } from './inventory-selection.service';
 import { AutomationService, HostGroup, PingRun } from '../automation/automation.service';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { NgTemplateOutlet } from '@angular/common';
 import { Clipboard } from '@angular/cdk/clipboard';
-import { afterNextRender, Component, DestroyRef, ElementRef, Injector, computed, inject, OnInit, signal } from '@angular/core';
+import { afterNextRender, Component, DestroyRef, ElementRef, Injector, computed, effect, inject, OnInit, signal, untracked } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatFormFieldModule } from '@angular/material/form-field';
@@ -14,17 +15,10 @@ import { MAT_TOOLTIP_DEFAULT_OPTIONS, MatTooltipModule } from '@angular/material
 import { MatSnackBar } from '@angular/material/snack-bar';
 import { Host, HostsService, IdentityOptions, Terminal } from './hosts.service';
 
-interface HostSystemInfo {
-  name: string;
-  kernel: string;
-  pending: boolean;
-  error: string;
-}
-
 @Component({
   selector: 'tower-hosts',
   providers: [{ provide: MAT_TOOLTIP_DEFAULT_OPTIONS, useFactory: () => ({ ...inject(MAT_TOOLTIP_DEFAULT_OPTIONS, { skipSelf: true }), disableTooltipInteractivity: true }) }],
-  imports: [RouterLink, NgTemplateOutlet, ReactiveFormsModule, MatButtonModule, MatFormFieldModule, MatInputModule, MatSelectModule, MatTooltipModule],
+  imports: [ RouterLink, NgTemplateOutlet, ReactiveFormsModule, MatButtonModule, MatFormFieldModule, MatInputModule, MatSelectModule, MatTooltipModule],
   templateUrl: './hosts.html',
   styleUrl: './hosts.scss'
 })
@@ -36,6 +30,7 @@ export class Hosts implements OnInit {
   private readonly destroyRef = inject(DestroyRef);
   private systemQueue: Host[] = [];
   private activeInspections = 0;
+  private readonly activeSystemRequests = new Set<string>();
   readonly automation = inject(AutomationService);
   readonly pingRun = signal<PingRun | null>(null);
   readonly pingError = signal('');
@@ -44,11 +39,12 @@ export class Hosts implements OnInit {
   private pingTimer?: ReturnType<typeof setTimeout>;
   private pingRevision = 0;
   readonly pingStatuses = computed(() => {
-    const results = new Map(this.pingRun()?.results.map(result => [result.host.id, result]));
+    const results = this.selection.pingResults();
     return new Map(this.hosts().map(host => {
       const result = results.get(host.id);
       const changed = result && JSON.stringify(result.host.settings) !== JSON.stringify(host.settings);
-      const outcome = this.pingError() ? 'unavailable' : changed ? 'changed' : result?.outcome ?? (this.pingLoaded() ? 'unchecked' : 'loading');
+      const error = this.pingError() && (!this.pingRun() || this.pingRun()?.results.some(r => r.host.id === host.id)) ? this.pingError() : '';
+      const outcome = error ? 'unavailable' : changed ? 'changed' : result?.outcome ?? (this.pingLoaded() ? 'unchecked' : 'loading');
       const labels: Record<string, string> = {
         waiting: 'Waiting', successful: 'Passed', unreachable: 'Unreachable', failed: 'Failed',
         cancelled: 'Cancelled', 'timed-out': 'Timed out', changed: 'Settings changed',
@@ -69,7 +65,7 @@ export class Hosts implements OnInit {
       const color = outcome === 'successful' ? 'bg-emerald-500 ring-emerald-500/10' :
         ['unreachable', 'failed', 'timed-out'].includes(outcome) ? 'bg-red-500 ring-red-500/10' :
         outcome === 'waiting' ? 'bg-blue-500 ring-blue-500/10' : 'bg-slate-400 ring-slate-400/10';
-      const detail = this.pingError() || (changed ? 'Host settings changed since this result. Run Ping again.' :
+      const detail = error || (changed ? 'Host settings changed since this result. Run Ping again.' :
         result ? result.diagnostics || (result.outcome === 'waiting' ? 'Waiting for Ansible to report a result.' : 'No additional diagnostics reported.') : 'No Ping result for this host in the latest run.');
       return [host.id, { outcome, label: labels[outcome], tooltip: tooltips[outcome], color, detail }];
     }));
@@ -83,6 +79,7 @@ export class Hosts implements OnInit {
       const run = await this.automation.latest();
       if (this.destroyRef.destroyed || revision !== this.pingRevision) return;
       this.pingRun.set(run);
+      this.selection.rememberPing(run);
       this.pingLoaded.set(true);
       this.pingError.set('');
     } catch (error) {
@@ -93,6 +90,85 @@ export class Hosts implements OnInit {
   }
   readonly selection = inject(InventorySelection);
   readonly runner = inject(AutomationRunner);
+  async quickPing(host: Host) {
+    if (this.busy()) return;
+    await this.runner.runPing(host.id);
+  }
+  private readonly reboots = inject(RebootsService);
+  readonly rowReboot = signal<RebootRun | null>(null);
+  readonly rebootHost = signal<Host | null>(null);
+  readonly rebootPending = signal(false);
+  readonly rebootError = signal('');
+  readonly rebootFeedback = computed(() => {
+    const run = this.rowReboot();
+    const result = run?.results.find(result => result.host.id === this.rebootHost()?.id);
+    if (this.rebootError()) return { label: 'Status unavailable', busy: false, attention: true, detail: this.rebootError() };
+    const state = result?.state;
+    if (state === 'successful') return { label: result?.rebootRequired ? 'Reboot verified · reboot still required' : 'Reboot verified', busy: false, attention: !!result?.rebootRequired, detail: '' };
+    if (state === 'failed' || state === 'unknown' || state === 'skipped') return {
+      label: state === 'unknown' ? 'Reboot unconfirmed' : state === 'skipped' ? 'Reboot not started' : 'Reboot needs attention',
+      busy: false, attention: true, detail: result?.message ?? '',
+    };
+    return { label: 'Rebooting',
+      busy: this.rebootPending() || !!run?.active, attention: false, detail: '' };
+  });
+  private rebootTimer?: ReturnType<typeof setTimeout>;
+  async quickReboot(host: Host) {
+    if (!this.service.desktop || this.busy() || this.rebootPending() || this.rowReboot()?.active) return;
+    clearTimeout(this.rebootTimer);
+    this.rebootHost.set(host); this.rowReboot.set(null);
+    await this.rebootOperation(async () => {
+      let run = await this.reboots.preview({ hostIds: [host.id], groupIds: [] });
+      const reviewId = run.id;
+      while (run.active && run.phase === 'preview' && !this.destroyRef.destroyed) {
+        this.rowReboot.set(run);
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        if (this.destroyRef.destroyed) return run;
+        const latest = await this.reboots.latest();
+        if (!latest || latest.id !== reviewId) throw new Error('Reboot review changed. No reboot submitted.');
+        run = latest;
+      }
+      if (this.destroyRef.destroyed) return run;
+      this.rowReboot.set(run);
+      if (run.phase !== 'review' || run.active || run.results.length !== 1
+          || run.results[0].host.id !== host.id || run.results[0].state !== 'ready') return run;
+      // The row click authorizes this one fresh review only. Polling never retries apply.
+      return this.reboots.apply(reviewId);
+    });
+  }
+  async refreshReboot() {
+    const run = this.rowReboot();
+    if (!run || this.rebootPending()) return;
+    await this.rebootOperation(() => this.reboots.refresh(run.id));
+  }
+  async pollReboot() {
+    const expected = this.rowReboot()?.id;
+    if (!expected || this.destroyRef.destroyed) return;
+    await this.rebootOperation(async () => {
+      const run = await this.reboots.latest();
+      if (!run || run.id !== expected) throw new Error('Reboot review changed. Review this host again.');
+      return run;
+    });
+  }
+  private async rebootOperation(operation: () => Promise<RebootRun>) {
+    clearTimeout(this.rebootTimer);
+    this.rebootPending.set(true); this.rebootError.set('');
+    try {
+      const run = await operation();
+      if (!this.destroyRef.destroyed) {
+        const previous = this.rowReboot();
+        this.rowReboot.set(run);
+        if (run.results[0]?.state === 'successful' && previous?.results[0]?.state !== 'successful') {
+          const host = this.hosts().find(host => host.id === run.results[0].host.id);
+          if (host) this.queueSystemInfo([host]);
+        }
+      }
+    } catch (error) { this.rebootError.set(String(error)); }
+    finally { this.rebootPending.set(false); }
+    if (!this.destroyRef.destroyed && this.rowReboot()?.active && !this.rebootError()) {
+      this.rebootTimer = setTimeout(() => void this.pollReboot(), 1500);
+    }
+  }
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   readonly groups = this.selection.groups;
@@ -164,7 +240,8 @@ export class Hosts implements OnInit {
       await this.router.navigateByUrl('/groups');
     });
   }
-  readonly systemInfo = signal<Record<string, HostSystemInfo>>({});
+  readonly systemInfo = inject(HostsService).systemInfo;
+  private systemTimer?: ReturnType<typeof setInterval>;
   readonly sort = signal('name');
   readonly layout = signal<'cards' | 'list'>('list');
   readonly expandedInfo = signal<ReadonlySet<string>>(new Set());
@@ -216,7 +293,20 @@ export class Hosts implements OnInit {
   });
 
   constructor() {
-    this.destroyRef.onDestroy(() => { this.systemQueue = []; clearTimeout(this.pingTimer); ++this.pingRevision; });
+    const seen = new Map<string, string>();
+    effect(() => {
+      const results = this.selection.pingResults();
+      untracked(() => {
+        for (const [id, result] of results) {
+          const signature = JSON.stringify(result);
+          if (seen.get(id) === signature) continue;
+          seen.set(id, signature);
+          const host = this.hosts().find(host => host.id === id);
+          if (host && result.outcome === 'successful' && !this.systemInfo()[id]?.pending) this.queueSystemInfo([host]);
+        }
+      });
+    });
+    this.destroyRef.onDestroy(() => { this.systemQueue = []; clearInterval(this.systemTimer); clearTimeout(this.rebootTimer); clearTimeout(this.pingTimer); ++this.pingRevision; });
   }
 
   copyInfo(host: Host, label: string, value: string | number) {
@@ -225,9 +315,15 @@ export class Hosts implements OnInit {
   }
 
   private queueSystemInfo(hosts: Host[]) {
+    hosts = hosts.filter(host => !this.activeSystemRequests.has(JSON.stringify([host.id, host.settings])));
     this.systemInfo.update(current => ({
       ...current,
-      ...Object.fromEntries(hosts.map(host => [host.id, { name: '', kernel: '', pending: true, error: '' }])),
+      ...Object.fromEntries(hosts.map(host => {
+        const settings = JSON.stringify(host.settings);
+        const previous = current[host.id]?.settings === settings ? current[host.id] : undefined;
+        return [host.id, { name: previous?.name ?? '', hostname: previous?.hostname ?? '', kernel: previous?.kernel ?? '',
+          updatedAt: previous?.updatedAt ?? 0, settings, pending: true, error: '' }];
+      })),
     }));
     const ids = new Set(hosts.map(host => host.id));
     this.systemQueue = [...this.systemQueue.filter(host => !ids.has(host.id)), ...hosts];
@@ -236,19 +332,20 @@ export class Hosts implements OnInit {
 
   private inspectNext() {
     if (this.destroyRef.destroyed) return;
-    while (this.activeInspections < 2 && this.systemQueue.length) {
+    while (this.activeInspections < 4 && this.systemQueue.length) {
       const host = this.systemQueue.shift()!;
       if (!this.hosts().includes(host)) continue;
       ++this.activeInspections;
+      this.activeSystemRequests.add(JSON.stringify([host.id, host.settings]));
       void this.loadSystemInfo(host);
     }
   }
 
   private async loadSystemInfo(host: Host) {
     const pending = this.systemInfo()[host.id];
-    const current = () => !this.destroyRef.destroyed && this.hosts().includes(host) && this.systemInfo()[host.id] === pending;
+    const current = () => !this.destroyRef.destroyed && this.hosts().some(saved => saved.id === host.id && JSON.stringify(saved.settings) === JSON.stringify(host.settings)) && this.systemInfo()[host.id] === pending;
     try {
-      const overview = await this.service.inspect(host.id);
+      const overview = await this.service.system(host);
       if (!current()) return;
       if (overview.target && JSON.stringify(overview.target.settings) !== JSON.stringify(host.settings)) {
         throw new Error('Host settings changed. Refresh the inventory to retry.');
@@ -258,14 +355,15 @@ export class Hosts implements OnInit {
       const value = (prefix: string) => system.output.split('\n').find(line => line.startsWith(prefix))?.slice(prefix.length).trim().replace(/^["']|["']$/g, '') ?? '';
       const name = value('PRETTY_NAME=') || [value('NAME='), value('VERSION_ID=')].filter(Boolean).join(' ');
       if (!name) throw new Error('The host did not report an OS name. Open Overview for details.');
-      this.systemInfo.update(info => ({ ...info, [host.id]: { name, kernel: value('Kernel:'), pending: false, error: '' } }));
+      this.systemInfo.update(info => ({ ...info, [host.id]: { ...pending, name, hostname: value('Hostname:'), kernel: value('Kernel:'), updatedAt: Date.now(), pending: false, error: '' } }));
     } catch (error) {
       if (current()) this.systemInfo.update(info => ({ ...info, [host.id]: {
-        name: '', kernel: '', pending: false,
+        ...pending, pending: false,
         error: error instanceof Error ? error.message : typeof error === 'string' ? error : 'Could not inspect this host. Open Overview for details.',
       } }));
     } finally {
       --this.activeInspections;
+      this.activeSystemRequests.delete(JSON.stringify([host.id, host.settings]));
       this.inspectNext();
     }
   }
@@ -273,6 +371,14 @@ export class Hosts implements OnInit {
   async ngOnInit() {
     if (!this.service.desktop) return;
     await this.refresh();
+    if (this.destroyRef.destroyed) return;
+    this.systemTimer = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      this.queueSystemInfo(this.hosts().filter(host => {
+        const info = this.systemInfo()[host.id];
+        return !info?.pending && (!info?.name || !!info.error || Date.now() - info.updatedAt >= 60000);
+      }));
+    }, 15000);
     const params = this.route.snapshot.queryParamMap;
     this.groupId.set(params.get('group') ?? '');
     this.overlapId.set(params.get('overlap') ?? '');
@@ -287,17 +393,24 @@ export class Hosts implements OnInit {
   async refresh() {
     void this.refreshPing();
     await this.perform(async () => {
-      const [hosts, identities, terminals, groups] = await Promise.all([this.service.list(), this.service.identities(), this.service.terminals(), this.automation.groups()]);
+      const hostRequest = this.service.list().then(hosts => {
+        if (this.destroyRef.destroyed) return;
+        this.hosts.set(hosts);
+        this.loaded.set(true);
+        this.systemQueue = [];
+        this.systemInfo.update(info => Object.fromEntries(hosts.flatMap(host => {
+          const cached = info[host.id];
+          return cached?.settings === JSON.stringify(host.settings) ? [[host.id, cached]] : [];
+        })));
+        this.queueSystemInfo(hosts);
+      });
+      const [, identities, terminals, groups] = await Promise.all([hostRequest, this.service.identities(), this.service.terminals(), this.automation.groups()]);
+      if (this.destroyRef.destroyed) return;
       this.groups.set(groups);
       if (!groups.some(g => g.id === this.groupId())) this.groupId.set('');
-      this.hosts.set(hosts);
       this.identities.set(identities);
       this.terminals.set(terminals);
       if (!terminals.some(t => t.id === this.terminal())) this.terminal.set(terminals[0]?.id ?? '');
-      this.loaded.set(true);
-      this.systemQueue = [];
-      this.systemInfo.set({});
-      this.queueSystemInfo(hosts);
     });
   }
 

@@ -11,6 +11,8 @@ pub struct Backend {
     pub operations: Mutex<()>,
     pub htop: crate::htop::Sessions,
     pub automation: crate::automation::Automation,
+    pub packages: crate::packages::Packages,
+    pub reboots: crate::reboots::Reboots,
 }
 
 async fn blocking<T: Send + 'static>(
@@ -100,12 +102,16 @@ mod tests {
                 operations: Mutex::new(()),
                 htop: Default::default(),
                 automation: Default::default(),
+                packages: Default::default(),
+                reboots: Default::default(),
             }))
             .invoke_handler(tauri::generate_handler![
                 list_hosts,
                 stop_htop,
                 list_host_groups,
-                latest_ping
+                latest_ping,
+                latest_packages,
+                latest_reboots
             ])
             .build(tauri::generate_context!())
             .unwrap();
@@ -129,12 +135,32 @@ mod tests {
         } else {
             "tauri://localhost"
         };
-        for cmd in ["list_hosts", "stop_htop", "list_host_groups", "latest_ping"] {
+        for cmd in [
+            "list_hosts",
+            "stop_htop",
+            "list_host_groups",
+            "latest_ping",
+            "latest_packages",
+            "latest_reboots",
+        ] {
             assert!(get_ipc_response(&main, request(local, cmd)).is_ok());
             assert!(get_ipc_response(&other, request(local, cmd)).is_err());
             assert!(get_ipc_response(&main, request("https://untrusted.example", cmd)).is_err());
         }
     }
+}
+
+#[tauri::command]
+pub async fn host_system_info(
+    state: State<'_, Arc<Backend>>,
+    id: String,
+) -> Result<crate::admin::Overview> {
+    let backend = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::admin::system_info(&backend.store, &backend.environment, &id)
+    })
+    .await
+    .map_err(|_| "OS query did not complete.".to_owned())?
 }
 
 #[tauri::command]
@@ -246,6 +272,24 @@ pub async fn ansible_availability() -> Result<String> {
         .map_err(|_| "Availability check failed.")?
 }
 #[tauri::command]
+pub async fn start_quick_ping(
+    state: State<'_, Arc<Backend>>,
+    host_id: String,
+) -> Result<crate::automation::Run> {
+    blocking(state.inner().clone(), move |b| {
+        b.automation.start_quick(&b.store, &b.environment, host_id)
+    })
+    .await
+}
+#[tauri::command]
+pub fn latest_quick_ping(
+    state: State<'_, Arc<Backend>>,
+    host_id: String,
+) -> Result<Option<crate::automation::Run>> {
+    state.automation.latest_quick(&host_id)
+}
+
+#[tauri::command]
 pub async fn start_ping(
     state: State<'_, Arc<Backend>>,
     targets: crate::inventory::AutomationTargets,
@@ -262,4 +306,175 @@ pub fn latest_ping(state: State<'_, Arc<Backend>>) -> Result<Option<crate::autom
 #[tauri::command]
 pub fn cancel_ping(state: State<'_, Arc<Backend>>, run_id: String) -> Result<()> {
     state.automation.cancel(&run_id)
+}
+
+#[tauri::command]
+pub async fn preview_packages(
+    state: State<'_, Arc<Backend>>,
+    targets: crate::inventory::AutomationTargets,
+) -> Result<crate::packages::Run> {
+    blocking(state.inner().clone(), move |b| {
+        b.ensure_reboots_idle()?;
+        b.packages.preview(&b.store, &b.environment, &targets)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn latest_packages(
+    state: State<'_, Arc<Backend>>,
+) -> Result<Option<crate::packages::Run>> {
+    blocking(state.inner().clone(), |b| b.packages.latest(&b.store)).await
+}
+#[tauri::command]
+pub async fn apply_packages(
+    state: State<'_, Arc<Backend>>,
+    run_id: String,
+) -> Result<crate::packages::Run> {
+    blocking(state.inner().clone(), move |b| {
+        b.ensure_reboots_idle()?;
+        b.packages.apply(&b.store, &b.environment, &run_id)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn refresh_packages(
+    state: State<'_, Arc<Backend>>,
+    run_id: String,
+) -> Result<crate::packages::Run> {
+    blocking(state.inner().clone(), move |b| {
+        b.packages.refresh(&b.store, &b.environment, &run_id)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn stop_packages(state: State<'_, Arc<Backend>>, run_id: String) -> Result<()> {
+    blocking(state.inner().clone(), move |b| {
+        b.packages.stop(&b.store, &run_id)
+    })
+    .await
+}
+
+impl Backend {
+    fn ensure_reboots_idle(&self) -> Result<()> {
+        if self
+            .reboots
+            .latest(&self.store)?
+            .is_some_and(|run| run.active || run.unresolved())
+        {
+            return Err("A reboot is active or unconfirmed. Refresh reboot status before package maintenance.".into());
+        }
+        Ok(())
+    }
+    fn ensure_packages_idle(&self) -> Result<()> {
+        if self
+            .packages
+            .latest(&self.store)?
+            .is_some_and(|run| run.active || run.unresolved())
+        {
+            return Err(
+                "Package maintenance is active or unconfirmed. Resolve it before rebooting.".into(),
+            );
+        }
+        Ok(())
+    }
+}
+#[tauri::command]
+pub async fn preview_reboots(
+    state: State<'_, Arc<Backend>>,
+    targets: crate::inventory::AutomationTargets,
+) -> Result<crate::reboots::Run> {
+    blocking(state.inner().clone(), move |b| {
+        b.ensure_packages_idle()?;
+        b.reboots.preview(&b.store, &b.environment, &targets)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn latest_reboots(state: State<'_, Arc<Backend>>) -> Result<Option<crate::reboots::Run>> {
+    blocking(state.inner().clone(), |b| b.reboots.latest(&b.store)).await
+}
+#[tauri::command]
+pub async fn apply_reboots(
+    state: State<'_, Arc<Backend>>,
+    run_id: String,
+) -> Result<crate::reboots::Run> {
+    blocking(state.inner().clone(), move |b| {
+        b.ensure_packages_idle()?;
+        b.reboots.apply(&b.store, &b.environment, &run_id)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn refresh_reboots(
+    state: State<'_, Arc<Backend>>,
+    run_id: String,
+) -> Result<crate::reboots::Run> {
+    blocking(state.inner().clone(), move |b| {
+        b.reboots.refresh(&b.store, &b.environment, &run_id)
+    })
+    .await
+}
+#[tauri::command]
+pub async fn stop_reboots(state: State<'_, Arc<Backend>>, run_id: String) -> Result<()> {
+    blocking(state.inner().clone(), move |b| {
+        b.reboots.stop(&b.store, &run_id)
+    })
+    .await
+}
+
+#[cfg(test)]
+mod maintenance_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn unresolved_maintenance_blocks_the_other_action_in_both_directions() {
+        for journal in ["package-updates.json", "reboots.json"] {
+            for (state, active) in [("unknown", false), ("launching", false), ("running", true)] {
+                let directory = tempfile::tempdir().unwrap();
+                let store = Store {
+                    directory: directory.path().join("data"),
+                };
+                let host = store
+                    .save(
+                        None,
+                        HostInput {
+                            name: "Ubuntu".into(),
+                            address: "192.0.2.1".into(),
+                            username: "root".into(),
+                            port: 22,
+                            authentication: crate::inventory::Authentication::KeyFile {
+                                filename: "key".into(),
+                            },
+                        },
+                    )
+                    .unwrap();
+                let mut file = tempfile::NamedTempFile::new_in(&store.directory).unwrap();
+                file.write_all(&serde_json::to_vec(&serde_json::json!({
+                    "id": uuid::Uuid::new_v4().to_string(), "targetLabel":"Ubuntu", "phase":"apply", "active":active, "stopRequested":false,
+                    "results":[{"host":host,"state":state,"message":"","plan":null,"digest":"","bootId":"","rebootRequired":false}]
+                })).unwrap()).unwrap();
+                file.persist(store.directory.join(journal)).unwrap();
+                let backend = Backend {
+                    store,
+                    environment: Environment {
+                        home: directory.path().to_owned(),
+                        agent_socket: None,
+                    },
+                    operations: Mutex::new(()),
+                    htop: Default::default(),
+                    automation: Default::default(),
+                    packages: Default::default(),
+                    reboots: Default::default(),
+                };
+                let error = if journal == "package-updates.json" {
+                    backend.ensure_packages_idle()
+                } else {
+                    backend.ensure_reboots_idle()
+                }
+                .unwrap_err();
+                assert!(error.contains("active or unconfirmed"), "{error}");
+            }
+        }
+    }
 }

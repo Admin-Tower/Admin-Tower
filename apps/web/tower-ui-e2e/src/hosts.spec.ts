@@ -21,7 +21,9 @@ test.describe('inventory with mocked native IPC', () => {
               case 'latest_ping': return null;
               case 'list_identities': return { agentIdentities: [], keyFiles: ['id_ed25519'], agentError: 'No SSH agent is available.', keyError: null };
               case 'list_terminals': return [{ id: 'xterm', label: 'xterm' }];
+              case 'host_system_info':
               case 'inspect_host':
+                if (localStorage.getItem('test-os-error')) throw new Error('Temporary SSH failure');
                 if (args.id === 'staging') throw new Error('SSH authentication required.');
                 return { collectedAt: 1, supported: true, elevated: false, sections: [
                   { id: 'system', status: 'ok', truncated: false, output: 'PRETTY_NAME="Ubuntu 24.04.1 LTS"\nKernel: Linux 6.8.0 x86_64 GNU/Linux' },
@@ -96,6 +98,14 @@ test.describe('inventory with mocked native IPC', () => {
     await expect(inventory.getByRole('listitem')).toHaveCount(3);
     const production = inventory.getByRole('listitem').filter({ has: page.getByRole('heading', { name: 'Production', exact: true }) });
     await expect(production.locator('.os-summary')).toContainText('Ubuntu 24.04.1 LTS');
+    await page.evaluate(() => localStorage.setItem('test-os-error', 'yes'));
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+    await expect(production.locator('.os-summary')).toHaveAttribute('aria-busy', 'false');
+    await expect(production.locator('.os-summary')).toContainText('Ubuntu 24.04.1 LTS');
+    await expect(production.locator('.os-summary')).toHaveAccessibleDescription(/Last known OS/);
+    await page.evaluate(() => localStorage.removeItem('test-os-error'));
+    await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+
     if (browserName === 'chromium') {
       await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
       await production.getByRole('button', { name: 'Copy address for Production', exact: true }).click();
@@ -105,7 +115,7 @@ test.describe('inventory with mocked native IPC', () => {
       await page.keyboard.press('Enter');
       expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('2222');
     }
-    await expect(inventory.getByRole('listitem').filter({ has: page.getByRole('heading', { name: 'Staging', exact: true }) }).locator('.os-summary')).toContainText('OS unavailable');
+    await expect(inventory.getByRole('listitem').filter({ has: page.getByRole('heading', { name: 'Staging', exact: true }) }).locator('.os-summary')).toContainText('OS not yet detected');
     const infoToggle = production.getByRole('button', { name: 'Quick info for Production', exact: true });
     const collapsedPosition = await infoToggle.boundingBox();
     await infoToggle.click();

@@ -1,0 +1,9 @@
+<details open class="mt-4 min-w-0 rounded-lg border border-[var(--tower-border)]">
+  <summary class="cursor-pointer px-3 py-2 text-sm font-medium">{{ label() }}</summary>
+  <div class="flex flex-wrap items-center justify-between gap-2 px-3 pb-2 text-xs text-[var(--tower-muted)]">
+    <span>Latest 64 KiB · refreshed while running</span>
+    <label class="flex items-center gap-2"><input type="checkbox" [checked]="follow()" (change)="follow.set($any($event.target).checked)">Follow output</label>
+  </div>
+  @if (error()) { <p class="m-0 px-3 pb-2 text-xs text-amber-800">{{ error() }}</p> }
+  <pre #output role="log" aria-live="off" [attr.aria-label]="label()" tabindex="0" class="m-0 max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-b-lg bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-100">{{ text() || 'Waiting for command output…' }}</pre>
+</details>

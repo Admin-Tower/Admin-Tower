@@ -118,14 +118,18 @@
             </label>
             <div class="host-details">
               <div class="host-identity"><div class="host-title !items-center !gap-2">
-                @if (pingStatuses().get(host.id); as ping) {
+                @if (rebootHost()?.id === host.id && rebootFeedback().busy) {
+                  <span role="status" tabindex="0" class="flex size-6 shrink-0 items-center justify-center text-blue-600" matTooltip="Rebooting" [attr.aria-label]="'Rebooting ' + host.settings.name">
+                    <span aria-hidden="true" class="size-3 animate-spin rounded-full border-2 border-current border-r-transparent motion-reduce:animate-none"></span>
+                  </span>
+                } @else if (pingStatuses().get(host.id); as ping) {
                   <button type="button" class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full hover:bg-[var(--mat-sys-surface-container)] focus-visible:outline-2 focus-visible:outline-blue-600" [attr.data-ping-status]="ping.outcome" [matTooltip]="ping.tooltip" [attr.aria-label]="'Ping for ' + host.settings.name + ': ' + ping.label" [attr.aria-expanded]="expandedPing() === host.id" [attr.aria-controls]="'ping-details-' + host.id" (click)="expandedPing.set(expandedPing() === host.id ? null : host.id)">
                     <span class="size-2.5 rounded-full ring-4 {{ ping.color }}" [class.motion-safe:animate-pulse]="ping.outcome === 'waiting'" aria-hidden="true"></span>
                   </button>
                 }
                 <h2><a [routerLink]="['/hosts', host.id]">{{ host.settings.name }}</a></h2><span class="protocol">SSH</span></div>
                 @if (pingStatuses().get(host.id); as ping) {
-                  <div [id]="'ping-details-' + host.id" [hidden]="expandedPing() !== host.id" class="my-2 max-w-full break-words text-xs text-[var(--tower-muted)]">
+                  <div [id]="'ping-details-' + host.id" [hidden]="expandedPing() !== host.id || (rebootHost()?.id === host.id && rebootFeedback().busy)" class="my-2 max-w-full break-words text-xs text-[var(--tower-muted)]">
                     <p class="!m-0">Ping · {{ ping.label }} — latest SSH and Python check</p>
                     <p class="!my-1 whitespace-pre-wrap break-all">{{ ping.detail }}</p>
                     @if (pingError()) { <button type="button" class="underline" (click)="refreshPing()">Retry status</button> }
@@ -145,18 +149,19 @@
               <div class="host-summary">
               @if (host.settings.port !== 22) { <p class="host-port">Port <ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Port', value: host.settings.port}" /></p> }
               @if (systemInfo()[host.id]; as system) {
-                <p class="os-summary" [attr.aria-busy]="system.pending" [matTooltip]="system.error">
+                <p class="os-summary" [attr.aria-busy]="system.pending" [matTooltip]="system.error ? (system.name ? 'Last known OS · ' : '') + system.error : (system.pending ? 'Refreshing OS information…' : '')">
                   <ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M4 4h16v12H4z M8 20h8 M12 16v4'}" />
-                  <span class="sr-only">Operating system: </span>@if (system.name && !system.pending) { <ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Operating system', value: system.name}" /> } @else { {{ system.pending ? 'Detecting OS…' : 'OS unavailable' }} }
+                  <span class="sr-only">Operating system: </span>@if (system.name) { <ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Operating system', value: system.name}" /> } @else { {{ system.pending ? 'Detecting OS…' : 'OS not yet detected' }} }
                 </p>
               }
               <div class="quick-info">
                 <button type="button" class="info-toggle" matTooltip="Quick info" (click)="toggleInfo(host.id)" [attr.aria-expanded]="expandedInfo().has(host.id)" [attr.aria-controls]="'quick-info-' + host.id" [attr.aria-label]="'Quick info for ' + host.settings.name"><ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M12 8h.01 M12 11v6 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0'}" /></button>
                 <dl [id]="'quick-info-' + host.id" [hidden]="!expandedInfo().has(host.id)">
                   @if (systemInfo()[host.id]; as system) {
-                    <dt>Operating system</dt><dd>@if (system.name && !system.pending) { <ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Operating system', value: system.name}" /> } @else { {{ system.pending ? 'Detecting…' : 'Unavailable' }} }</dd>
+                    <dt>Hostname</dt><dd>@if (system.hostname) { <ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Hostname', value: system.hostname}" /> } @else { {{ system.pending ? 'Detecting…' : 'Not reported' }} }</dd>
+                    <dt>Operating system</dt><dd>@if (system.name) { <ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Operating system', value: system.name}" /> } @else { {{ system.pending ? 'Detecting…' : 'Unavailable' }} }</dd>
                     @if (system.kernel) { <dt>Kernel</dt><dd><ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Kernel', value: system.kernel}" /></dd> }
-                    @if (system.error) { <dt>Inspection</dt><dd>{{ system.error }} Use Refresh to retry.</dd> }
+                    @if (system.error) { <dt>Inspection</dt><dd>{{ system.error }} Retrying automatically.</dd> }
                   }
                   <dt>Address</dt><dd><ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'Address', value: host.settings.address}" /></dd>
                   <dt>SSH user</dt><dd><ng-container *ngTemplateOutlet="copyValue; context: {host: host, label: 'SSH user', value: host.settings.username}" /></dd>
@@ -168,6 +173,16 @@
               </div>
             </div>
             <div class="host-actions" role="group" [attr.aria-label]="'Actions for ' + host.settings.name">
+              <span matTooltip="Ping · check SSH connectivity">
+                <button mat-icon-button (click)="quickPing(host)" [disabled]="busy() || runner.quickPending().has(host.id)" [attr.aria-label]="'Ping ' + host.settings.name">
+                  <ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M3 12h4l3-8 4 16 3-8h4'}" />
+                </button>
+              </span>
+              <span matTooltip="Reboot now · interrupts services">
+                <button mat-icon-button (click)="quickReboot(host)" [disabled]="busy() || rebootPending() || !!rowReboot()?.active" [attr.aria-label]="'Reboot ' + host.settings.name">
+                  <ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M20 7v5h-5 M20 12a8 8 0 1 0-2 5 M20 7v5'}" />
+                </button>
+              </span>
               <span matTooltip="Open terminal">
                 <button mat-icon-button class="connect-action" (click)="connect(host)" [disabled]="busy() || !terminal()" [attr.aria-label]="'Open terminal for ' + host.settings.name">
                   <ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M4 5l6 7-6 7 M13 19h7'}" />
@@ -186,6 +201,19 @@
                 <ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7'}" />
               </button>
             </div>
+            @if (rebootHost()?.id === host.id && !rebootFeedback().busy) {
+              <div class="col-span-full flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 px-2 py-1 text-sm" [attr.aria-label]="'Reboot status for ' + host.settings.name">
+                <span role="status" class="inline-flex items-center gap-2" [class.text-amber-700]="rebootFeedback().attention" [class.text-emerald-700]="rowReboot()?.results?.[0]?.state === 'successful' && !rebootFeedback().attention">
+                  {{ rebootFeedback().label }}
+                </span>
+                @if (rebootFeedback().detail) { <span class="min-w-0 break-words text-[var(--tower-muted)]">{{ rebootFeedback().detail }}</span> }
+                @if (rebootError() && rowReboot()) { <button matButton (click)="pollReboot()" [disabled]="rebootPending()">Retry status</button> }
+                @if (rowReboot()?.results?.[0]?.state === 'unknown' && !rowReboot()?.active) { <button matButton (click)="refreshReboot()" [disabled]="rebootPending()">Check status</button> }
+                @if (!rebootPending() && !rowReboot()?.active) {
+                  <button mat-icon-button (click)="rebootHost.set(null)" matTooltip="Dismiss status" [attr.aria-label]="'Dismiss reboot status for ' + host.settings.name"><ng-container *ngTemplateOutlet="icon; context: {$implicit: 'M6 6l12 12 M6 18L18 6'}" /></button>
+                }
+              </div>
+            }
             @if (deleting()?.id === host.id) {
               <div class="delete-confirm" role="group" [attr.aria-label]="'Confirm deletion of ' + host.settings.name">
                 <p>Remove {{ host.settings.name }} from your inventory? Your SSH keys and server trust will be kept.</p>

@@ -1,0 +1,61 @@
+<section aria-labelledby="reboot-heading" class="mx-auto max-w-6xl">
+  <nav aria-label="Breadcrumb" class="mb-5 text-sm"><a routerLink="/automation">Automation</a><span class="mx-2 text-slate-400" aria-hidden="true">/</span><span aria-current="page">Reboot Ubuntu hosts</span></nav>
+  <header class="mb-7"><h1 id="reboot-heading" class="m-0 text-3xl font-semibold tracking-tight">Reboot Ubuntu hosts</h1>
+    <p class="mt-2 text-[var(--tower-muted)]">Review hosts, confirm the service interruption, then reboot one host at a time.</p>
+  </header>
+  @if (!desktop) {
+    <div class="rounded-xl border border-[var(--tower-border)] bg-white p-6"><h2 class="mt-0 text-lg font-semibold">Open Admin-Tower for Linux</h2><p class="mb-0">Use saved hosts and SSH identities to review and confirm a reboot.</p></div>
+  } @else {
+    <section aria-label="Next selection" class="mb-6 rounded-xl border border-[var(--tower-border)] bg-white p-5">
+      <div class="flex flex-wrap items-center justify-between gap-4"><div><h2 class="m-0 text-base font-semibold">Next selection</h2><p class="mb-0 mt-2 text-sm">{{ selection.selectedHosts().length }} hosts selected · <a routerLink="/hosts">Hosts</a> · <a routerLink="/groups">Groups</a></p></div>
+        <button matButton="filled" (click)="preview()" [disabled]="!canPreview()">Review reboot</button>
+      </div>
+      @if (selection.selectedHosts().length) { <ul class="mb-0 flex flex-wrap gap-x-5 gap-y-1 pl-4 text-sm text-[var(--tower-muted)]" aria-label="Selected hosts">@for (host of selection.selectedHosts(); track host.id) { <li>{{ host.settings.name }}</li> }</ul> }
+      @if (loading()) { <p role="status">Loading hosts…</p> }
+      @if (targetsError()) { <p role="alert" class="text-red-700">{{ targetsError() }}</p><button matButton (click)="refreshTargets()">Retry hosts</button> }
+      @if (selection.missingCount()) { <p role="alert" class="text-red-700">Some selected targets no longer exist. Review your selection.</p> }
+      <p class="mb-0 mt-4 text-xs text-[var(--tower-muted)]">Review checks Ubuntu, SSH access and startup configuration, reboot requests and package-manager activity. It does not reboot a host. Requires root or passwordless sudo.</p>
+    </section>
+    @if (error()) { <p role="alert" class="rounded-lg bg-red-50 p-3 text-red-700">{{ error() }}</p> }
+    @if (pollError()) { <p role="alert" class="text-red-700">Could not load reboot results: {{ pollError() }}</p><button matButton (click)="poll()">Retry results</button> }
+    @if (run(); as latest) {
+      <section aria-labelledby="reboot-results-heading" class="overflow-hidden rounded-xl border border-[var(--tower-border)] bg-white">
+        <header class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--tower-border)] p-5">
+          <div><h2 id="reboot-results-heading" class="m-0 text-lg font-semibold">{{ latest.targetLabel }}</h2><p role="status" class="mb-0 mt-1 text-sm text-[var(--tower-muted)]">{{ latest.active ? (latest.phase === 'preview' ? 'Inspecting hosts…' : 'Waiting for reboot verification…') : (latest.phase === 'review' ? 'Review before rebooting' : 'Latest results') }}</p></div>
+          @if (latest.active) { <button matButton (click)="stop()" [disabled]="pending() || latest.stopRequested">{{ latest.stopRequested ? 'Stopping after current host' : 'Stop after current host' }}</button> }
+          @if (unresolved() && !latest.active) { <button matButton (click)="refresh()" [disabled]="pending()">Refresh reboot status</button> }
+        </header>
+        @if (latest.active) { <mat-progress-bar mode="indeterminate" aria-label="Reboot progress" /> }
+        @if (unresolved() && !latest.active) { <p role="alert" class="m-0 bg-amber-50 p-5 text-sm text-amber-900">A reboot may have been submitted. Refresh status to verify the host. This only checks the host; it never sends another reboot.</p> }
+        <ul class="m-0 list-none divide-y divide-[var(--tower-border)] p-0" aria-label="Reboot host results">
+          @for (result of latest.results; track result.host.id) {
+            <li class="p-5">
+              <div class="flex flex-wrap items-start justify-between gap-3"><div><h3 class="m-0 text-base font-semibold">{{ result.host.settings.name }}</h3><p class="mb-0 mt-1 break-all text-xs text-[var(--tower-muted)]">{{ result.host.settings.username }}&#64;{{ result.host.settings.address }}:{{ result.host.settings.port }}</p></div><span class="rounded-full bg-slate-100 px-3 py-1 text-xs" [class.text-emerald-700]="result.state === 'successful'" [class.text-amber-800]="result.state === 'failed' || result.state === 'unknown'">{{ labels[result.state] }}</span></div>
+              @if (result.plan; as plan) {
+                <p class="mb-0 mt-3 text-xs text-[var(--tower-muted)]">{{ plan.os }} · Reviewed {{ plan.createdAt * 1000 | date:'medium' }}</p>
+                @if (plan.sshStartup) { <p class="mb-0 mt-2 text-sm text-[var(--tower-muted)]">SSH verified during review: {{ plan.sshStartup }} enabled at boot · configuration valid</p> }
+                @if (result.state === 'ready') {
+                  <p class="text-sm font-medium">{{ result.rebootRequired ? 'Ubuntu reports a pending reboot.' : 'Ubuntu does not report a pending reboot. You can still choose to restart this host.' }}</p>
+                  @if (plan.requestedBy.length) { <p class="break-words text-sm text-[var(--tower-muted)]">Requested by: {{ plan.requestedBy.join(', ') }}</p> }
+                } @else if (result.state === 'successful' && result.rebootRequired) { <p class="text-sm text-amber-800">A new boot was verified, but Ubuntu still reports a pending reboot. Inspect the host before another reboot.</p> }
+                @if (plan.failedServices.length) { <p class="text-xs text-amber-800">Already failed before reboot: {{ plan.failedServices.join(', ') }}</p> }
+              }
+              @if (result.message) { <p class="whitespace-pre-wrap break-words text-sm text-[var(--tower-muted)]">{{ result.message }}</p> }
+              <tower-run-log [text]="result.logs" [label]="'Live logs · ' + result.host.settings.name" />
+            </li>
+          }
+        </ul>
+        @if (latest.phase === 'review') {
+          <footer class="border-t border-[var(--tower-border)] bg-amber-50 p-5">
+            <h3 class="mt-0 text-base font-semibold">Reboot interrupts every service on these hosts</h3>
+            <p class="text-sm">Confirm a suitable maintenance window and that you can recover a host through its provider console if it does not return. A reboot may activate an already installed kernel; it does not install deferred package updates.</p>
+            <label class="mb-4 flex items-start gap-3 text-sm"><input class="mt-1" type="checkbox" [checked]="acknowledged()" (change)="acknowledged.set($any($event.target).checked)" [disabled]="pending()"><span>I understand these hosts will temporarily go offline.</span></label>
+            <button matButton="filled" (click)="apply()" [disabled]="!canApply()">Reboot {{ latest.results.length }} {{ latest.results.length === 1 ? 'host' : 'hosts' }} now</button>
+            <p class="mb-0 mt-3 text-xs text-[var(--tower-muted)]">Reviews expire after 15 minutes. The rollout stops if a reboot cannot be verified or additional services fail.</p>
+          </footer>
+        }
+      </section>
+      <p class="mt-4 text-xs text-[var(--tower-muted)]">Success requires a changed boot ID, working SSH and ready systemd. Application endpoints are not checked. Closing the app or stopping the rollout does not undo a submitted reboot; remaining hosts will not start automatically after an interruption.</p>
+    } @else { <p role="status" class="text-sm text-[var(--tower-muted)]">{{ loaded() ? 'Select Ubuntu Server hosts and review their reboot.' : 'Loading latest reboot results…' }}</p> }
+  }
+</section>

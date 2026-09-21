@@ -1,10 +1,23 @@
 import { computed, Injectable, signal } from '@angular/core';
 import { Host } from './hosts.service';
-import { AutomationTargets, HostGroup } from '../automation/automation.service';
+import { AutomationTargets, HostGroup, PingRun } from '../automation/automation.service';
 
 /** Explicit host and group choices survive navigation until successfully submitted. */
 @Injectable({ providedIn: 'root' })
 export class InventorySelection {
+  readonly pingResults = signal<Map<string, PingRun['results'][number]>>(new Map());
+  readonly quickOverrides = new Set<string>();
+  rememberPing(run: PingRun | null, quick = false) {
+    if (!run) return;
+    this.pingResults.update(current => {
+      const next = new Map(current);
+      for (const result of run.results) {
+        if (quick) this.quickOverrides.add(result.host.id);
+        if (quick || !this.quickOverrides.has(result.host.id)) next.set(result.host.id, result);
+      }
+      return next;
+    });
+  }
   readonly hostIds = signal<string[]>([]);
   readonly groupIds = signal<string[]>([]);
   readonly hosts = signal<Host[]>([]);

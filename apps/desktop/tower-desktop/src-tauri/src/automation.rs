@@ -37,6 +37,7 @@ pub struct Run {
     pub elapsed_ms: u64,
     pub results: Vec<HostResult>,
     pub message: String,
+    pub logs: String,
 }
 struct Job {
     run: Arc<Mutex<Run>>,
@@ -46,8 +47,35 @@ struct Job {
 #[derive(Default)]
 pub struct Automation {
     job: Mutex<Option<Job>>,
+    quick: Mutex<std::collections::HashMap<String, Automation>>,
 }
 impl Automation {
+    pub fn start_quick(
+        &self,
+        store: &Store,
+        environment: &Environment,
+        host_id: String,
+    ) -> Result<Run> {
+        let mut quick = self.quick.lock().map_err(|_| "Quick Ping unavailable.")?;
+        let runner = quick.entry(host_id.clone()).or_default();
+        runner.start(
+            store,
+            environment,
+            &inventory::AutomationTargets {
+                host_ids: vec![host_id],
+                group_ids: Vec::new(),
+            },
+        )
+    }
+    pub fn latest_quick(&self, host_id: &str) -> Result<Option<Run>> {
+        let quick = self.quick.lock().map_err(|_| "Quick Ping unavailable.")?;
+        quick
+            .get(host_id)
+            .map(Automation::latest)
+            .transpose()
+            .map(Option::flatten)
+    }
+
     /// Called once during native app setup, before the UI can start another run.
     pub fn startup(&self, store: &Store, environment: &Environment) -> Result<Option<Run>> {
         let hosts = store.list()?;
@@ -109,6 +137,7 @@ impl Automation {
             active: true,
             elapsed_ms: 0,
             message: String::new(),
+            logs: String::new(),
             results: hosts
                 .into_iter()
                 .map(|host| HostResult {
@@ -164,6 +193,11 @@ impl Automation {
         Ok(())
     }
     pub fn shutdown(&self) {
+        if let Ok(mut quick) = self.quick.lock() {
+            for (_, runner) in quick.drain() {
+                runner.shutdown();
+            }
+        }
         if let Ok(mut slot) = self.job.lock() {
             if let Some(mut job) = slot.take() {
                 job.cancel.store(true, Ordering::SeqCst);
@@ -180,18 +214,29 @@ impl Drop for Automation {
     }
 }
 
-// The guard also kills descendants after normal exit, before private files are removed.
-struct Process(Child);
+// Let Ansible signal its workers: recent versions put them in separate sessions.
+// A direct SIGKILL of the controller skips that cleanup and can orphan workers.
+pub(crate) struct Process(pub(crate) Child);
 impl Drop for Process {
     fn drop(&mut self) {
-        // SAFETY: child was spawned with a new process group equal to its PID.
+        if matches!(self.0.try_wait(), Ok(None)) {
+            // SAFETY: the unreaped Child owns this PID.
+            unsafe {
+                libc::kill(self.0.id() as i32, libc::SIGINT);
+            }
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while matches!(self.0.try_wait(), Ok(None)) && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+        // SAFETY: each child starts a new process group equal to its PID.
         unsafe {
             libc::kill(-(self.0.id() as i32), libc::SIGKILL);
         }
         let _ = self.0.wait();
     }
 }
-fn context(root: &Path) -> Result<Command> {
+pub(crate) fn context(root: &Path) -> Result<Command> {
     let empty = root.join("plugins");
     fs::create_dir_all(&empty).map_err(|_| "Cannot create private plugin directory.")?;
     let config = String::from("[defaults]\nretry_files_enabled=False\nhost_key_checking=True\ncollections_scan_sys_path=False\nvars_plugins_enabled=\nstdout_callback=ansible.builtin.default\n[inventory]\nenable_plugins=ansible.builtin.yaml\n[privilege_escalation]\nbecome=False\n[ssh_connection]\npipelining=True\nssh_executable=/usr/bin/ssh\ntransfer_method=piped\n");
@@ -213,6 +258,7 @@ fn context(root: &Path) -> Result<Command> {
         .env("ANSIBLE_LOCAL_TEMP", root.join("tmp"))
         .env("ANSIBLE_COLLECTIONS_PATH", &empty)
         .env("ANSIBLE_NOCOLOR", "1")
+        .env("PYTHONUNBUFFERED", "1")
         .env("SSH_ASKPASS_REQUIRE", "never")
         .stdin(Stdio::null());
     for kind in [
@@ -251,7 +297,7 @@ fn context(root: &Path) -> Result<Command> {
     }
     Ok(command)
 }
-fn private_root() -> Result<tempfile::TempDir> {
+pub(crate) fn private_root() -> Result<tempfile::TempDir> {
     tempfile::Builder::new()
         .prefix(&format!("admin-tower-ping-{}-", std::process::id()))
         .permissions(fs::Permissions::from_mode(0o700))
@@ -295,7 +341,7 @@ pub fn availability() -> Result<String> {
 fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
-fn host_variables(host: &Host, prepared: &ssh::Prepared) -> Value {
+pub(crate) fn host_variables(host: &Host, prepared: &ssh::Prepared) -> Value {
     // Drop only the terminal destination, retaining all hardened SSH options.
     let args = prepared.arguments[..prepared.arguments.len() - 2]
         .iter()
@@ -309,7 +355,7 @@ fn host_variables(host: &Host, prepared: &ssh::Prepared) -> Value {
         "ansible_ssh_executable": "/usr/bin/ssh", "ansible_pipelining": true,
         "ansible_ssh_transfer_method": "piped", "ansible_python_interpreter": "auto_silent"})
 }
-fn read_output(mut file: fs::File) -> Result<String> {
+pub(crate) fn read_output(mut file: fs::File) -> Result<String> {
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
     file.take(OUTPUT_LIMIT)
@@ -422,6 +468,7 @@ fn execute(
             "all",
             "-m",
             "ansible.builtin.ping",
+            "-vvv",
             "-f",
             "5",
             "-T",
@@ -442,6 +489,7 @@ fn execute(
     let reason = loop {
         let mut run = state.lock().unwrap();
         collect(&mut run, &tree, false);
+        run.logs = log_tail(&output).unwrap_or_default();
         run.elapsed_ms = started.elapsed().as_millis() as u64;
         drop(run);
         if cancel.load(Ordering::SeqCst) {
@@ -461,6 +509,7 @@ fn execute(
     drop(child);
     let mut run = state.lock().unwrap();
     collect(&mut run, &tree, true);
+    run.logs = log_tail(&output).unwrap_or_default();
     let outcome = match reason {
         "cancelled" => "cancelled",
         "timed-out" => "timed-out",
@@ -477,6 +526,56 @@ fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quick_jobs_are_independent_and_shutdown_cancels_each() {
+        let automation = Automation::default();
+        let mut cancellations = Vec::new();
+        for id in ["host-a", "host-b"] {
+            let cancel = Arc::new(AtomicBool::new(false));
+            cancellations.push(cancel.clone());
+            let runner = Automation::default();
+            *runner.job.lock().unwrap() = Some(Job {
+                run: Arc::new(Mutex::new(Run {
+                    id: id.into(),
+                    target_label: id.into(),
+                    active: true,
+                    elapsed_ms: 0,
+                    results: Vec::new(),
+                    message: String::new(),
+                    logs: String::new(),
+                })),
+                cancel,
+                worker: None,
+            });
+            automation.quick.lock().unwrap().insert(id.into(), runner);
+        }
+        assert!(automation.latest().unwrap().is_none());
+        assert_eq!(
+            automation.latest_quick("host-a").unwrap().unwrap().id,
+            "host-a"
+        );
+        assert_eq!(
+            automation.latest_quick("host-b").unwrap().unwrap().id,
+            "host-b"
+        );
+        let root = tempfile::tempdir().unwrap();
+        let store = Store {
+            directory: root.path().join("inventory"),
+        };
+        let environment = Environment {
+            home: root.path().into(),
+            agent_socket: None,
+        };
+        assert!(automation
+            .start_quick(&store, &environment, "host-a".into())
+            .is_err());
+        assert!(automation.latest_quick("host-b").unwrap().unwrap().active);
+        automation.shutdown();
+        assert!(cancellations
+            .iter()
+            .all(|cancel| cancel.load(Ordering::SeqCst)));
+    }
 
     #[test]
     fn startup_skips_empty_inventory_and_snapshots_every_saved_host() {
@@ -613,6 +712,7 @@ mod tests {
             active: true,
             elapsed_ms: 0,
             message: String::new(),
+            logs: String::new(),
             results: vec![HostResult {
                 host,
                 outcome: "waiting".into(),
@@ -639,5 +739,32 @@ mod tests {
         assert_eq!(run.results[0].outcome, "waiting");
         collect(&mut run, root.path(), true);
         assert_eq!(run.results[0].outcome, "failed");
+    }
+}
+
+/// Positional reads must not move the file offset shared with the child's writer.
+pub(crate) fn log_tail(file: &fs::File) -> Result<String> {
+    use std::os::unix::fs::FileExt;
+    let length = file.metadata().map_err(|e| e.to_string())?.len();
+    let start = length.saturating_sub(65536);
+    let mut bytes = vec![0; (length - start) as usize];
+    let count = file.read_at(&mut bytes, start).map_err(|e| e.to_string())?;
+    bytes.truncate(count);
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[cfg(test)]
+mod log_tests {
+    use super::*;
+    use std::io::Write;
+    #[test]
+    fn live_tail_is_bounded_and_does_not_move_the_writer_offset() {
+        let mut writer = tempfile::tempfile().unwrap();
+        let reader = writer.try_clone().unwrap();
+        writer.write_all(&vec![b'a'; 70000]).unwrap();
+        assert_eq!(log_tail(&reader).unwrap().len(), 65536);
+        writer.write_all(b"last output").unwrap();
+        assert_eq!(writer.metadata().unwrap().len(), 70011);
+        assert!(log_tail(&reader).unwrap().ends_with("last output"));
     }
 }

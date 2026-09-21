@@ -1,3 +1,4 @@
+import { RunLog } from '../run-log/run-log';
 import { AutomationRunner } from '../automation-runner.service';
 import { InventorySelection } from '../../hosts/inventory-selection.service';
 import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
@@ -10,7 +11,7 @@ import { PING_TASK } from '../tasks';
 
 @Component({
   selector: 'tower-ping',
-  imports: [RouterLink, MatButtonModule, MatProgressBarModule],
+  imports: [RunLog, RouterLink, MatButtonModule, MatProgressBarModule],
   templateUrl: './ping.html',
 })
 export class Ping implements OnInit {

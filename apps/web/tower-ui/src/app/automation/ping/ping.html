@@ -68,6 +68,7 @@
               </li>
             }
           </ul>
+          <div class="px-5 pb-4"><tower-run-log [text]="latest.logs ?? ''" /></div>
           @if (latest.message) { <details class="border-t border-[var(--tower-border)] p-5 text-sm"><summary class="cursor-pointer">Run diagnostics</summary><pre class="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{{ latest.message }}</pre></details> }
           <p class="m-0 border-t border-[var(--tower-border)] px-5 py-3 text-xs text-[var(--tower-muted)]">Results stay available during this application session, including when you leave this page.</p>
         } @else {

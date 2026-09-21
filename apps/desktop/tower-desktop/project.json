@@ -53,6 +53,20 @@
         "cwd": "apps/desktop/tower-desktop/src-tauri",
         "command": "cargo test live_ansible -- --ignored --nocapture"
       }
+    },
+    "test-packages-transport": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/desktop/tower-desktop/src-tauri",
+        "command": "cargo test live_package_ansible -- --ignored --nocapture"
+      }
+    },
+    "test-reboot-transport": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/desktop/tower-desktop/src-tauri",
+        "command": "cargo test live_reboot -- --ignored --nocapture"
+      }
     }
   }
 }

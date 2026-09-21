@@ -25,6 +25,7 @@ test('host detail reviews actions, refreshes results and keeps firewall read-onl
           case 'latest_ping': return null;
           case 'list_identities': return { agentIdentities: [], keyFiles: ['id_ed25519'], agentError: null, keyError: null };
           case 'list_terminals': return [{ id: 'xterm', label: 'xterm' }];
+          case 'host_system_info':
           case 'inspect_host': return snapshot;
           case 'review_host_action':
             current = args['action'] as typeof current;

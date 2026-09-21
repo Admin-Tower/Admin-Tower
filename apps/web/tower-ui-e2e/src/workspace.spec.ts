@@ -8,7 +8,7 @@ test('keeps context, reviews row actions in place and switches hosts directly', 
     Object.assign(window, { isTauri: true, __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
       if (command === 'list_hosts') return hosts;
       if (command === 'list_terminals') return [{ id: 'xterm', label: 'xterm' }];
-      if (command === 'inspect_host') return { collectedAt: Date.now() / 1000, supported: true, elevated: false, sections: [
+      if (command === 'inspect_host' || command === 'host_system_info') return { collectedAt: Date.now() / 1000, supported: true, elevated: false, sections: [
         { id: 'system', status: 'ok', truncated: false, output: 'PRETTY_NAME="Debian GNU/Linux"' },
         { id: 'services', status: 'ok', truncated: false, output: 'ssh.service loaded active running OpenSSH\ncron.service loaded active running Scheduled tasks\nworker.service loaded failed failed Worker' },
       ] };

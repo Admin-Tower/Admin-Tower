@@ -1,5 +1,5 @@
 import { Component, inject, OnInit } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { InventorySelection } from '../hosts/inventory-selection.service';
 import { HostsService } from '../hosts/hosts.service';
 import { AutomationService } from './automation.service';
@@ -13,6 +13,13 @@ export class Automation implements OnInit {
   private readonly inventory = inject(HostsService);
   private readonly service = inject(AutomationService);
   readonly tasks = AUTOMATION_TASKS;
+  private readonly router = inject(Router);
+  openTask(id: string) {
+    if (id === 'ping') return this.runner.runPing();
+    const task = this.tasks.find(task => task.id === id);
+    if (task) return this.router.navigateByUrl(task.route);
+    return undefined;
+  }
   async ngOnInit() {
     if (!this.inventory.desktop) return;
     try {
